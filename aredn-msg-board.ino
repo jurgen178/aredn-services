@@ -40,6 +40,7 @@ constexpr uint8_t OLED_HEIGHT = 64;
 constexpr int8_t OLED_RESET = -1;
 constexpr uint8_t OLED_ADDRESS = 0x3C;
 constexpr uint32_t OLED_PAGE_INTERVAL_MS = 5000;
+constexpr uint8_t OLED_PAGE_COUNT = 3;
 
 // These objects are shared by asynchronous HTTP callbacks and the main Arduino loop.
 AsyncWebServer server(80);
@@ -246,7 +247,7 @@ void drawBoardDisplay()
 
   if (displayedPage == 0)
   {
-    display.println("AREDN MESSAGE BOARD");
+    display.println("AREDN SERVICES");
     drawDisplayLine(1, "IP: ", WiFi.status() == WL_CONNECTED
         ? WiFi.localIP().toString().c_str()
         : "DISCONNECTED");
@@ -275,7 +276,7 @@ void drawBoardDisplay()
           static_cast<unsigned long>((uptimeSeconds / 60) % 60));
         drawDisplayLine(7, "Uptime: ", metrics);
   }
-  else
+  else if (displayedPage == 1)
   {
     // The second page shows the newest cached message; the author is truncated to fit the OLED.
     if (!latestMessageAvailable)
@@ -303,6 +304,17 @@ void drawBoardDisplay()
       printDisplayUtf8(latestMessage.text);
       display.println();
     }
+  }
+  else
+  {
+    display.println("AREDN CAMERA");
+    drawDisplayLine(1, "State: ", "Not configured");
+    drawDisplayLine(2, "View: ", "Bellevue");
+    drawDisplayLine(3, "", "Downtown");
+    drawDisplayLine(4, "Snapshot: ", "Pending");
+    drawDisplayLine(5, "Camera IP: ", "Not set");
+    drawDisplayLine(6, "Overlay: ", "Browser only");
+    drawDisplayLine(7, "", "Waiting for setup");
   }
 
   display.display();
@@ -1780,10 +1792,10 @@ void loop()
     }
     if (boardChanged || now - lastDisplayUpdate >= OLED_PAGE_INTERVAL_MS)
     {
-      // Show changed content immediately; otherwise alternate between status and message pages.
+      // Show changed content immediately; otherwise rotate through the OLED service pages.
       if (!boardChanged && lastDisplayUpdate != 0)
       {
-        displayedPage = static_cast<uint8_t>(displayedPage == 0 ? 1 : 0);
+        displayedPage = static_cast<uint8_t>((displayedPage + 1) % OLED_PAGE_COUNT);
       }
       lastDisplayUpdate = now;
       drawBoardDisplay();

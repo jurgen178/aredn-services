@@ -38,7 +38,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     .header-inner {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-start;
       gap: 20px;
     }
     .eyebrow {
@@ -49,23 +49,17 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-    h1 { margin: 0; font-size: clamp(1.8rem, 6vw, 2.5rem); }
-    .intro { margin: 8px 0 0; color: #d8e3dc; }
-    .service-nav { display: flex; justify-content: flex-end; }
-    .service-nav a {
-      padding: 3px 0;
-      color: #c8d9ce;
-      font-size: 0.75rem;
+    .eyebrow-link {
+      color: inherit;
       text-decoration: none;
-      opacity: 0.85;
     }
-    .service-nav a:hover, .service-nav a:focus-visible {
-      color: #fff;
-      opacity: 1;
+    .eyebrow-link:hover, .eyebrow-link:focus-visible {
       text-decoration: underline;
       text-underline-offset: 3px;
     }
-    .service-nav a:focus-visible { outline: 3px solid #e2a34c; outline-offset: 3px; }
+    .eyebrow-link:focus-visible { outline: 2px solid #e2a34c; outline-offset: 3px; }
+    h1 { margin: 0; font-size: clamp(1.8rem, 6vw, 2.5rem); }
+    .intro { margin: 8px 0 0; color: #d8e3dc; }
     main { padding: 30px 24px; }
     .panel {
       padding: 22px;
@@ -163,13 +157,10 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
   <header>
     <div class="header-inner">
       <div>
-        <p class="eyebrow">AREDN · Bellevue Downtown View</p>
+        <p class="eyebrow"><a class="eyebrow-link" href="/" title="Open the AREDN services portal">AREDN · Bellevue Downtown View</a></p>
         <h1>Camera</h1>
         <p class="intro">A still image with lightweight browser-side overlays.</p>
       </div>
-      <nav class="service-nav" aria-label="Service navigation">
-        <a href="/">Services</a>
-      </nav>
     </div>
   </header>
   <main>

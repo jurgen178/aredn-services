@@ -94,7 +94,7 @@ Scan for nearby networks and select one, or enter its SSID manually to connect t
 
 ## Hardware
 
-The optional SSD1306 OLED is connected through the board's default I2C interface. The display address used by the sketch is `0x3C`. The service can also run without the display; it reports the I2C device as unavailable and continues to start the web service.
+The optional SSD1306 OLED is connected through the board's default I2C interface. The display address used by the sketch is `0x3C`. When connected, it cycles every five seconds through the server status, newest message, and camera status pages. The camera page currently shows setup placeholders until a camera snapshot source is configured. The service can also run without the display; it reports the I2C device as unavailable and continues to start the web service.
 
 When no router Wi-Fi credentials have been saved yet, the OLED shows the setup access point name and password and the URL to open on a connected phone or computer.
 

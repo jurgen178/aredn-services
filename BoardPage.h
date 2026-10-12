@@ -65,6 +65,22 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       text-transform: uppercase;
     }
 
+    .eyebrow-link {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .eyebrow-link:hover,
+    .eyebrow-link:focus-visible {
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .eyebrow-link:focus-visible {
+      outline: 2px solid #e2a34c;
+      outline-offset: 3px;
+    }
+
     h1 {
       margin: 0;
       font-size: 2.4rem;
@@ -88,33 +104,6 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
 
     .experimental-note a {
       color: inherit;
-    }
-
-    .service-nav {
-      display: flex;
-      flex-wrap: wrap;
-      margin-top: 14px;
-    }
-
-    .service-nav a {
-      padding: 3px 0;
-      color: #c8d9ce;
-      font-size: 0.75rem;
-      text-decoration: none;
-      opacity: 0.85;
-    }
-
-    .service-nav a:hover,
-    .service-nav a:focus-visible {
-      color: #fff;
-      opacity: 1;
-      text-decoration: underline;
-      text-underline-offset: 3px;
-    }
-
-    .service-nav a:focus-visible {
-      outline: 3px solid #e2a34c;
-      outline-offset: 3px;
     }
 
     .network-state {
@@ -592,13 +581,10 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
   <header class="topbar">
     <div class="topbar-inner">
       <div>
-        <p class="eyebrow">AREDN · Local message service</p>
+        <p class="eyebrow"><a class="eyebrow-link" href="/" title="Open the AREDN services portal">AREDN · Local message service</a></p>
         <h1>Message Board</h1>
         <p class="intro">Short updates for everyone on the network.</p>
         <p class="experimental-note">EXPERIMENTAL ESP32-S3 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-msg-board" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
-        <nav class="service-nav" aria-label="Service navigation">
-          <a href="/">Services</a>
-        </nav>
       </div>
       <div class="header-indicators">
         <div class="device-clock" aria-label="Device clock">
