@@ -81,18 +81,81 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       color: #5c6e66;
       font-size: 0.85rem;
     }
+    .panel-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
     .camera-frame {
       position: relative;
       overflow: hidden;
       width: 100%;
+      aspect-ratio: 16 / 9;
+      display: grid;
+      place-items: center;
+      background-color: #192b2a;
+      border: 1px solid #344b45;
+      border-radius: 10px;
+    }
+    .camera-content {
+      position: relative;
+      overflow: hidden;
+      width: 100%;
+      height: 100%;
       aspect-ratio: 16 / 9;
       background-color: #192b2a;
       background-image:
         linear-gradient(rgb(255 255 255 / 5%) 1px, transparent 1px),
         linear-gradient(90deg, rgb(255 255 255 / 5%) 1px, transparent 1px);
       background-size: 32px 32px;
-      border: 1px solid #344b45;
-      border-radius: 10px;
+    }
+    .camera-frame:fullscreen {
+      width: 100vw;
+      height: 100vh;
+      max-width: none;
+      aspect-ratio: auto;
+      background: #000;
+      border: 0;
+      border-radius: 0;
+    }
+    .camera-frame:fullscreen .camera-content {
+      width: min(100vw, 177.7778vh);
+      height: min(100vh, 56.25vw);
+    }
+    .fullscreen-button {
+      padding: 8px 11px;
+      color: #173b33;
+      font: inherit;
+      font-size: 0.82rem;
+      background: #e4eee8;
+      border: 1px solid #c8d9ce;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .fullscreen-button:hover { background: #d8e7dd; }
+    .fullscreen-button:focus-visible {
+      outline: 3px solid #f0a24b;
+      outline-offset: 2px;
+    }
+    .fullscreen-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+    .fullscreen-exit-button {
+      position: absolute;
+      z-index: 2;
+      top: 10px;
+      right: 10px;
+      color: #f6f7f2;
+      background: rgb(23 39 34 / 88%);
+      border-color: rgb(255 255 255 / 45%);
+    }
+    .fullscreen-exit-button:not([hidden]) { display: block; }
+    .fullscreen-exit-button:hover { background: #173b33; }
+    .fullscreen-status {
+      margin: 10px 0 0;
+      color: #a2382d;
+      font-size: 0.85rem;
     }
     .camera-placeholder {
       position: absolute;
@@ -148,6 +211,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
     @media (max-width: 620px) {
       .header-inner, .panel-head { align-items: flex-start; flex-direction: column; }
+      .panel-actions { width: 100%; justify-content: space-between; }
       .panel { padding: 16px; }
       main { padding: 20px 14px; }
     }
@@ -167,23 +231,79 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     <section class="panel" aria-labelledby="previewTitle">
       <div class="panel-head">
         <h2 id="previewTitle">Camera preview</h2>
-        <p class="status" role="status">Camera not configured</p>
-      </div>
-      <div class="camera-frame" role="img" aria-label="Camera preview placeholder with percentage-positioned example lines and labels">
-        <div class="camera-placeholder">
-          <strong>Camera connection pending</strong>
-          <span>This preview will show the latest JPEG snapshot.</span>
+        <div class="panel-actions">
+          <p id="cameraStatus" class="status" role="status">Camera not configured</p>
+          <button id="fullscreenButton" class="fullscreen-button" type="button">Fullscreen</button>
         </div>
-        <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-          <line x1="10%" y1="30%" x2="90%" y2="30%"></line>
-          <line x1="10%" y1="70%" x2="90%" y2="80%"></line>
-        </svg>
-        <span class="overlay-label" style="--x: 10%; --y: 32%;">TEXT 1</span>
-        <span class="overlay-label" style="--x: 60%; --y: 62%;">TEXT 2</span>
       </div>
+      <div id="cameraFrame" class="camera-frame" role="region" aria-label="Camera preview">
+        <button id="fullscreenExitButton" class="fullscreen-button fullscreen-exit-button" type="button" hidden>Exit fullscreen</button>
+        <div class="camera-content">
+          <div class="camera-placeholder">
+            <strong>Camera connection pending</strong>
+            <span>This preview will show the latest JPEG snapshot.</span>
+          </div>
+          <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <line x1="10%" y1="30%" x2="90%" y2="30%"></line>
+            <line x1="10%" y1="70%" x2="90%" y2="80%"></line>
+          </svg>
+          <span class="overlay-label" style="--x: 10%; --y: 32%;">TEXT 1</span>
+          <span class="overlay-label" style="--x: 60%; --y: 62%;">TEXT 2</span>
+        </div>
+      </div>
+      <p id="fullscreenStatus" class="fullscreen-status" role="status" hidden></p>
       <p class="note">Overlay positions are percentages from the image's top-left corner (0%, 0%). For labels, edit <code>--x</code> and <code>--y</code>; for lines, edit <code>x1</code>/<code>y1</code> and <code>x2</code>/<code>y2</code>. The overlay is drawn in the browser, not into the camera image.</p>
     </section>
   </main>
+  <script>
+    const cameraFrame = document.getElementById('cameraFrame');
+    const fullscreenButton = document.getElementById('fullscreenButton');
+    const fullscreenExitButton = document.getElementById('fullscreenExitButton');
+    const fullscreenStatus = document.getElementById('fullscreenStatus');
+    const fullscreenSupported =
+      document.fullscreenEnabled !== false &&
+      typeof cameraFrame.requestFullscreen === 'function' &&
+      typeof document.exitFullscreen === 'function';
+
+    function updateFullscreenButton() {
+      const isFullscreen = document.fullscreenElement === cameraFrame;
+      fullscreenButton.hidden = isFullscreen;
+      fullscreenExitButton.hidden = !isFullscreen;
+      fullscreenButton.setAttribute('aria-label', 'View camera fullscreen');
+      fullscreenButton.setAttribute('aria-pressed', String(isFullscreen));
+      fullscreenExitButton.setAttribute('aria-label', 'Exit camera fullscreen');
+    }
+
+    async function toggleFullscreen() {
+      if (!fullscreenSupported) {
+        return;
+      }
+      fullscreenStatus.hidden = true;
+      try {
+        if (document.fullscreenElement === cameraFrame) {
+          await document.exitFullscreen();
+        } else {
+          await cameraFrame.requestFullscreen();
+        }
+      } catch {
+        fullscreenStatus.textContent = 'Fullscreen could not be changed in this browser.';
+        fullscreenStatus.hidden = false;
+      }
+    }
+
+    fullscreenButton.addEventListener('click', toggleFullscreen);
+    fullscreenExitButton.addEventListener('click', toggleFullscreen);
+
+    document.addEventListener('fullscreenchange', updateFullscreenButton);
+    if (!fullscreenSupported) {
+      fullscreenButton.disabled = true;
+      fullscreenExitButton.disabled = true;
+      fullscreenButton.title = 'Fullscreen is not supported by this browser.';
+      fullscreenStatus.textContent = 'Fullscreen is not supported by this browser.';
+      fullscreenStatus.hidden = false;
+    }
+    updateFullscreenButton();
+  </script>
 </body>
 </html>
 )AREDN_CAMERA";

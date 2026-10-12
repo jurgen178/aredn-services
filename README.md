@@ -156,7 +156,7 @@ These endpoints are only available to clients connected to the `AREDN-Server-Set
 
 ### Camera Service
 
-`GET /camera` serves the camera page. The SVG overlay is drawn in the visitor's browser and remains separate from the camera JPEG. Example line and label positions are percentages measured from the image's top-left corner, so they scale with the displayed image. The current page is a preparation preview; the Reolink snapshot connection and camera-specific overlay positions will be added after the camera is available for testing.
+`GET /camera` serves the camera page. Its preview can be expanded to fullscreen in supported browsers. The SVG overlay is drawn in the visitor's browser and remains separate from the camera JPEG. Example line and label positions are percentages measured from the image's top-left corner, so they scale with the displayed image. The current page is a preparation preview; the Reolink snapshot connection and camera-specific overlay positions will be added after the camera is available for testing.
 
 `GET /camera/image.jpg` currently returns `503 Camera is not configured yet`.
 
