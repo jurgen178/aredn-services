@@ -2,8 +2,6 @@
 
 A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides a message board and a Reolink RLC-510A snapshot page without requiring external internet or central server infrastructure.
 
-<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3227.JPG" alt="ESP32" width="500">
-<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3225.JPG" alt="ESP32" width="500">
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3293.JPG" alt="AREDN">
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/msg-board-www.jpg" alt="Message board" width="500">
 
@@ -35,6 +33,10 @@ For an Arduino Nano ESP32, connect a 4-pin I2C SSD1306 OLED as follows:
 | `GND` | `GND` | Ground |
 | `SDA` | `A4` / `SDA` | I2C data |
 | `SCL` | `A5` / `SCL` | I2C clock |
+
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3227.JPG" alt="ESP32" width="500">
+
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3225.JPG" alt="ESP32" width="500">
 
 Check the module's pin labels before connecting it. Do not apply 5 V to a 3.3 V-only OLED module.
 
