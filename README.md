@@ -1,15 +1,15 @@
-# AREDN Message Board for ESP32
+# AREDN Server for ESP32
 
-A lightweight message board designed for the **AREDN (Amateur Radio Emergency Data Network)**. It runs entirely on an Arduino Nano ESP32, providing a local chat hub for radio amateurs without requiring external internet or central server infrastructure.
+A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides separate paths for a message board and Reolink RLC-510A snapshot service without requiring external internet or central server infrastructure.
 
 
-<img src="https://github.com/jurgen178/aredn-msg-board/blob/main/doc/DSC_3227.JPG" alt="ESP32" width="500">
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3227.JPG" alt="ESP32" width="500">
 
-<img src="https://github.com/jurgen178/aredn-msg-board/blob/main/doc/DSC_3225.JPG" alt="ESP32" width="500">
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3225.JPG" alt="ESP32" width="500">
 
-<img src="https://github.com/jurgen178/aredn-msg-board/blob/main/doc/DSC_3293.JPG" alt="AREDN">
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3293.JPG" alt="AREDN">
 
-<img src="https://github.com/jurgen178/aredn-msg-board/blob/main/doc/msg-board-www.jpg" alt="msg board">
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/msg-board-www.jpg" alt="msg board">
 
 
 ## Key Technical Features
@@ -22,8 +22,10 @@ A lightweight message board designed for the **AREDN (Amateur Radio Emergency Da
 
 ## API Documentation
 
+The service portal is available at `/`. The message board is served at `/msg-board`, and its API is namespaced under `/msg-board/api/`. The camera snapshot page is available at `/camera`.
+
 ### 1. Fetch Messages
-* **Endpoint:** `GET /api/messages`
+* **Endpoint:** `GET /msg-board/api/messages`
 * **Optional parameters:** `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, `c_time=<epoch>`
 * **Description:** Returns newest messages first. Use `after` for new messages, `before` for older messages, and `limit` to cap the page size.
 * **Response Payload Format:**
@@ -32,7 +34,7 @@ A lightweight message board designed for the **AREDN (Amateur Radio Emergency Da
 ```
 
 ### 2. Submit Message
-* **Endpoint:** `POST /api/messages`
+* **Endpoint:** `POST /msg-board/api/messages`
 * **Payload Format:**
 ```json
 {
@@ -53,15 +55,15 @@ There are two ways to install the firmware:
 
 ### Flash directly from the web page
 
-The firmware can be flashed directly to the board from the [AREDN Message Board Web Flasher](https://bitfabrik.io/aredn-msg-board-firmware/).
+The firmware can be flashed directly to the board from the [AREDN Server Web Flasher](https://bitfabrik.io/aredn-services-firmware/).
 
-<img src="https://github.com/jurgen178/aredn-msg-board/blob/main/doc/web-flasher.png" alt="web flasher" width="500">
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/web-flasher.png" alt="web flasher" width="500">
 
-Connect the board to your computer by USB, open the page in a supported browser, and follow its instructions. After flashing, connect to the `AREDN-Message-Board-Setup` access point and configure the router Wi-Fi as described in Wi-Fi Setup. Once Wi-Fi is configured, the board is ready to use.
+Connect the board to your computer by USB, open the page in a supported browser, and follow its instructions. After flashing, connect to the `AREDN-Server-Setup` access point and configure the router Wi-Fi as described in Wi-Fi Setup. Once Wi-Fi is configured, the board is ready to use.
 
 ### Build and flash from the GitHub source
 
-You can also build and install the firmware yourself from the [GitHub source repository](https://github.com/jurgen178/aredn-msg-board):
+You can also build and install the firmware yourself from the [GitHub source repository](https://github.com/jurgen178/aredn-services):
 
 1. Install the ESP32 board package in the Arduino IDE.
 2. Select an Arduino Nano ESP32 or a compatible ESP32 board with FFat support.
@@ -69,30 +71,30 @@ You can also build and install the firmware yourself from the [GitHub source rep
    * ESPAsyncWebServer
    * Adafruit GFX Library
    * Adafruit SSD1306
-4. Open `aredn-msg-board.ino`, select the correct board and port, then upload the sketch.
-5. Connect to the `AREDN-Message-Board-Setup` access point and configure the router Wi-Fi as described above.
+4. Open `aredn-services.ino`, select the correct board and port, then upload the sketch.
+5. Connect to the `AREDN-Server-Setup` access point and configure the router Wi-Fi as described above.
 
 The service uses the ESP32's built-in `WiFi`, `Wire`, `FFat`, FreeRTOS and system libraries. `WebServer` and `ArduinoJson` are not required.
 
 ### Wi-Fi Setup
 
-The device always starts the `AREDN-Message-Board-Setup` access point, including while connected to the router Wi-Fi:
+The device always starts the `AREDN-Server-Setup` access point, including while connected to the router Wi-Fi:
 
-* **Access point:** `AREDN-Message-Board-Setup`
+* **Access point:** `AREDN-Server-Setup`
 * **Password:** `arednsetup`
-* **Setup page:** `http://192.168.4.1/wifi`
+* **Setup page:** `http://192.168.4.1/setup`
 
-**Important:** The Wi-Fi setup page is only available while your phone or computer is connected to the `AREDN-Message-Board-Setup` access point. It cannot be opened through the router Wi-Fi or the AREDN network.
+**Important:** The Wi-Fi setup page is only available while your phone or computer is connected to the `AREDN-Server-Setup` access point. It cannot be opened through the router Wi-Fi or the AREDN network.
 
 Connect a phone or computer to the setup access point and open the setup page.
 
-<img src="https://github.com/jurgen178/aredn-msg-board/blob/main/doc/wifi-setup.png" alt="wifi-setup" width="500">
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/wifi-setup.png" alt="wifi-setup" width="500">
 
 Scan for nearby networks and select one, or enter its SSID manually to connect to a hidden network; then enter the Wi-Fi password. The ESP32 tests the connection and saves working credentials in its non-volatile storage. If there are no saved credentials, the optional OLED displays the access point name, password, and setup address. The same setup page remains available through the access point for later changes. The Wi-Fi configuration page and API only accept requests from clients connected to that access point.
 
 ## Hardware
 
-The optional SSD1306 OLED is connected through the board's default I2C interface. The display address used by the sketch is `0x3C`. The service can also run without the display; it reports the I2C device as unavailable and continues to start the web service.
+The optional SSD1306 OLED is connected through the board's default I2C interface. The display address used by the sketch is `0x3C`. When connected, it cycles every five seconds through server status, newest message, and camera status including the latest snapshot age. The service can also run without the display; it reports the I2C device as unavailable and continues to start the web service.
 
 When no router Wi-Fi credentials have been saved yet, the OLED shows the setup access point name and password and the URL to open on a connected phone or computer.
 
@@ -123,26 +125,28 @@ Supported import fields are `id`, `created_at` in UTC ISO-8601 format (`YYYY-MM-
 
 `GET /api/status` returns Wi-Fi, heap, FFat and board information.
 
-`GET /api/time` returns the current device clock state.
+`GET /msg-board/api/time` returns the current device clock state.
 
 ### Admin API
 
 The following endpoints require the admin session cookie created by login:
 
-* `POST /api/admin/login` with form field `password`
-* `POST /api/admin/logout`
-* `GET /api/admin/status`
-* `POST /api/admin/import` with an `application/json` file body
-* `DELETE /api/admin/messages`
-* `DELETE /api/admin/message?id=<id>`
-* `POST /api/admin/message?id=<id>` with form fields `name`, `text`, and `priority`
-* `POST /api/time` with form field `epoch`
+* `POST /msg-board/api/admin/login` with form field `password`
+* `POST /msg-board/api/admin/logout`
+* `GET /msg-board/api/admin/status`
+* `POST /msg-board/api/admin/import` with an `application/json` file body
+* `DELETE /msg-board/api/admin/messages`
+* `DELETE /msg-board/api/admin/message?id=<id>`
+* `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority`
+* `POST /msg-board/api/time` with form field `epoch`
 
 ### Wi-Fi Setup API
 
-These endpoints are only available to clients connected to the `AREDN-Message-Board-Setup` access point:
+These endpoints are only available to clients connected to the `AREDN-Server-Setup` access point:
 
-* `GET /wifi` serves the Wi-Fi configuration page.
+* `GET /setup` serves the setup selection page.
+* `GET /setup/wifi` serves the Wi-Fi configuration page.
+* `GET /setup/camera` serves the Reolink camera configuration page.
 * `GET /api/wifi/status` returns the connection state and setup/router IP addresses.
 * `POST /api/wifi/scan` starts an asynchronous scan for nearby networks.
 * `GET /api/wifi/networks` returns `scanning`, `complete` with scan results, or `idle`.
@@ -150,14 +154,33 @@ These endpoints are only available to clients connected to the `AREDN-Message-Bo
 
 ### Export
 
-`GET /api/messages/export.json` downloads the complete board as JSON.
+`GET /msg-board/api/messages/export.json` downloads the complete board as JSON.
+
+### Camera Service
+
+`GET /camera` serves the camera page. Its preview can be expanded to fullscreen in supported browsers. The SVG overlay is drawn in each visitor's browser and remains separate from the camera JPEG.
+
+Configure the camera while connected to the `AREDN-Server-Setup` access point:
+
+* Open `http://192.168.4.1/setup` and choose **Reolink camera**.
+* Give the RLC-510A a reserved IPv4 address on a network reachable by the ESP32.
+* Enable the camera's HTTP port in Reolink settings. The default port is `80`; see Reolink's [port settings guide](https://support.reolink.com/articles/900000621783-How-to-Configure-Reolink-Ports-Settings/).
+* Enter the camera IP, HTTP port, and a Reolink username/password. The password is stored in ESP32 Preferences and is never returned by the setup API or sent to camera-page viewers.
+
+The ESP32 uses Reolink's `cmd=Snap` JPEG endpoint and requests a 640×480 image. A background FreeRTOS task obtains one snapshot every 30 seconds, independent of viewer count. The latest JPEG is held in two bounded PSRAM buffers so the active image can be served to multiple viewers while the next one is downloaded. The browser checks the small status endpoint every 15 seconds and downloads the JPEG only when its version changes. It pauses while the page is hidden.
+
+The camera-to-ESP32 request uses HTTP and includes the camera credentials in that local request. Use a dedicated camera account and keep the camera connection on a trusted local network; do not expose the camera's HTTP port to the mesh or Internet. The camera's HTTP port must be enabled. Some camera firmware may ignore the requested reduced resolution; snapshots larger than the 2 MiB buffer limit are rejected and reported in the camera status.
+
+* `GET /camera/api/status` reports snapshot availability, age, and current state without revealing camera settings.
+* `GET /camera/image.jpg` serves the current cached JPEG. Before the first successful snapshot, it returns `503`.
+* `/setup`, `/setup/wifi`, `/setup/camera`, `GET /api/camera/config`, `POST /api/camera/config`, and `DELETE /api/camera/config` are restricted to clients connected to the setup access point.
 
 ### Examples
 
 Submit a message:
 
 ```powershell
-Invoke-WebRequest http://device-address/api/messages -Method Post -Body @{
+Invoke-WebRequest http://device-address/msg-board/api/messages -Method Post -Body @{
   name = 'W6AM'
   text = 'Acknowledged.'
   priority = 'green'    # 'green' = normal, 'orange' = important, 'red' = urgent
@@ -168,7 +191,7 @@ Invoke-WebRequest http://device-address/api/messages -Method Post -Body @{
 Read the newest messages:
 
 ```powershell
-Invoke-RestMethod 'http://device-address/api/messages?limit=20'
+Invoke-RestMethod 'http://device-address/msg-board/api/messages?limit=20'
 ```
 
 Use `after=<id>` for newer messages and `before=<id>` for older messages. Additional filters are `search=<term>` and `priority=green|orange|red|all`.
