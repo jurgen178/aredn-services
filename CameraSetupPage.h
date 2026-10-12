@@ -27,11 +27,35 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
     #status.error { color: #a2382d; }
     .warning { padding: 12px; border-left: 3px solid #c55b36; background: #fbf3ed; }
     a { color: #173b33; }
+    .setup-nav { margin: 0 0 18px; }
+    .setup-link {
+      display: inline-flex;
+      min-height: 38px;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border: 1px solid #d7ded7;
+      border-radius: 999px;
+      color: #173b33;
+      background: #e4eee8;
+      font-size: 0.9rem;
+      font-weight: 700;
+      text-decoration: none;
+      transition: background-color 140ms ease, border-color 140ms ease;
+    }
+    .setup-link:hover { border-color: #b8c9be; background: #d8e7dd; }
+    .setup-link:focus-visible { outline: 3px solid #c55b36; outline-offset: 2px; }
+    .setup-link svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   </style>
 </head>
 <body>
   <main>
-    <p><a href="/setup">← Setup home</a></p>
+    <nav class="setup-nav" aria-label="Setup navigation">
+      <a class="setup-link" href="/setup">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m7 7-7-7 7-7"></path></svg>
+        <span>All setup options</span>
+      </a>
+    </nav>
     <h1>Reolink camera setup</h1>
     <p>Set the camera's reserved IPv4 address and its HTTP port. The camera password is stored on this device and is never sent to camera-page visitors.</p>
     <p class="warning">Enable the camera's HTTP port in Reolink settings. Use a dedicated camera account if possible. The camera connection uses HTTP, so keep it on a trusted local network.</p>

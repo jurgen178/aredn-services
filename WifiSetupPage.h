@@ -25,17 +25,61 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
     .password-toggle { position: absolute; top: 0; right: 0; width: 46px; min-height: 46px; margin: 0; padding: 0; border: 0; color: #173b33; background: transparent; }
     .password-toggle:focus-visible { outline: 2px solid #173b33; outline-offset: -2px; }
     .password-toggle svg { display: block; width: 22px; height: 22px; margin: auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-    #status { min-height: 48px; color: #5c6e66; }
+    #status { min-height: 24px; margin: 8px 0 14px; color: #5c6e66; }
     #status.error { color: #a2382d; }
     #scan-status { min-height: 24px; color: #5c6e66; font-size: 0.9rem; }
     .hint { margin-top: 6px; color: #5c6e66; font-size: 0.9rem; }
+    .current-connection { margin: 20px 0 28px; padding: 18px; border: 1px solid #d7ded7; border-left: 4px solid #173b33; border-radius: 8px; background: #f3f7f3; }
+    .current-connection h2 { margin: 0; color: #173b33; font-size: 1.1rem; }
+    .connection-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 10px; margin: 0; }
+    .connection-details div { min-width: 0; padding: 11px 12px; border: 1px solid #e0e7e0; border-radius: 6px; background: #fff; }
+    .connection-details dt { color: #5c6e66; font-size: 0.82rem; font-weight: 700; }
+    .connection-details dd { margin: 4px 0 0; color: #172722; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .setup-nav { margin: 0 0 18px; }
+    .setup-link {
+      display: inline-flex;
+      min-height: 38px;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border: 1px solid #d7ded7;
+      border-radius: 999px;
+      color: #173b33;
+      background: #e4eee8;
+      font-size: 0.9rem;
+      font-weight: 700;
+      text-decoration: none;
+      transition: background-color 140ms ease, border-color 140ms ease;
+    }
+    .setup-link:hover { border-color: #b8c9be; background: #d8e7dd; }
+    .setup-link:focus-visible { outline: 3px solid #c55b36; outline-offset: 2px; }
+    .setup-link svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   </style>
 </head>
 <body>
   <main>
-    <p><a href="/setup">← Setup home</a></p>
+    <nav class="setup-nav" aria-label="Setup navigation">
+      <a class="setup-link" href="/setup">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5m7 7-7-7 7-7"></path></svg>
+        <span>All setup options</span>
+      </a>
+    </nav>
     <h1>AREDN Wi-Fi Setup</h1>
     <p>The device scans for nearby networks automatically. Select yours from the list or enter a hidden network name manually.</p>
+    <section class="current-connection" aria-labelledby="current-connection-heading">
+      <h2 id="current-connection-heading">Current connection</h2>
+      <p id="status" role="status" aria-live="polite">Checking device status...</p>
+      <dl class="connection-details">
+        <div>
+          <dt>Router Wi-Fi address</dt>
+          <dd id="router-address">Checking...</dd>
+        </div>
+        <div>
+          <dt>Setup access point address</dt>
+          <dd id="setup-address">Checking...</dd>
+        </div>
+      </dl>
+    </section>
     <label for="networks">Available Wi-Fi networks</label>
     <select id="networks">
       <option value="">Choose a network...</option>
@@ -58,10 +102,11 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
       </div>
       <button id="submit" type="submit">Save and connect</button>
     </form>
-    <p id="status" role="status" aria-live="polite">Checking device status...</p>
   </main>
   <script>
     const statusElement = document.getElementById('status');
+    const routerAddressElement = document.getElementById('router-address');
+    const setupAddressElement = document.getElementById('setup-address');
     const submitButton = document.getElementById('submit');
     const scanStatus = document.getElementById('scan-status');
     const networksSelect = document.getElementById('networks');
@@ -88,10 +133,15 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
         const response = await fetch('/api/wifi/status', { cache: 'no-store' });
         if (!response.ok) throw new Error('status request failed');
         const status = await response.json();
+        const connected = status.state === 'connected' && status.wifi_connected;
+        routerAddressElement.textContent = connected
+          ? status.sta_ip
+          : status.state === 'connecting' ? 'Connecting...' : 'Not connected';
+        setupAddressElement.textContent = status.ap_ip || 'Unavailable';
         if (status.state === 'connected' && status.wifi_connected) {
           checkingConnection = false;
           submitButton.disabled = scanningNetworks;
-          showStatus(`Connected. Router Wi-Fi address: ${status.sta_ip}. Setup access point: ${status.ap_ip}.`);
+          showStatus('Connected to router Wi-Fi.');
         } else if (status.state === 'connecting') {
           checkingConnection = true;
           submitButton.disabled = true;
@@ -107,7 +157,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
         } else {
           checkingConnection = false;
           submitButton.disabled = scanningNetworks;
-          showStatus(`Waiting for Wi-Fi details. Setup access point: ${status.ap_ip}.`);
+          showStatus('Waiting for Wi-Fi details.');
         }
       } catch (error) {
         if (!checkingConnection) showStatus('Could not read device status. Check that you are connected to the setup access point.', true);
