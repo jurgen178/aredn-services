@@ -43,7 +43,7 @@ constexpr uint8_t OLED_HEIGHT = 64;
 constexpr int8_t OLED_RESET = -1;
 constexpr uint8_t OLED_ADDRESS = 0x3C;
 constexpr uint32_t OLED_PAGE_INTERVAL_MS = 5000;
-constexpr uint8_t OLED_PAGE_COUNT = 3;
+constexpr uint8_t OLED_PAGE_COUNT = 4;
 
 // These objects are shared by asynchronous HTTP callbacks and the main Arduino loop.
 AsyncWebServer server(80);
@@ -116,6 +116,45 @@ void drawDisplayLine(uint8_t row, const char* label, const char* value)
 {
   display.setCursor(0, row * 8);
   display.print(label);
+  display.print(value);
+}
+
+void drawLargeIpLine(const char* value, int16_t y)
+{
+  uint16_t lineWidth = 0;
+  for (const char* current = value; *current != '\0'; ++current)
+  {
+    lineWidth += *current == '.' ? 6 : 18;
+  }
+
+  int16_t cursorX = (static_cast<int16_t>(OLED_WIDTH) - lineWidth) / 2;
+  for (const char* current = value; *current != '\0'; ++current)
+  {
+    if (*current == '.')
+    {
+      display.setTextSize(1);
+      display.setCursor(cursorX, y + 14);
+      display.write('.');
+      cursorX += 6;
+    }
+    else
+    {
+      display.setTextSize(3);
+      display.setCursor(cursorX, y);
+      display.write(static_cast<uint8_t>(*current));
+      cursorX += 18;
+    }
+  }
+}
+
+void drawCenteredDisplayText(const char* value, int16_t y)
+{
+  int16_t boundsX;
+  int16_t boundsY;
+  uint16_t textWidth;
+  uint16_t textHeight;
+  display.getTextBounds(value, 0, y, &boundsX, &boundsY, &textWidth, &textHeight);
+  display.setCursor((OLED_WIDTH - textWidth) / 2, y);
   display.print(value);
 }
 
@@ -252,9 +291,9 @@ void drawBoardDisplay()
   if (displayedPage == 0)
   {
     display.println("AREDN SERVICES");
-    drawDisplayLine(1, "IP: ", WiFi.status() == WL_CONNECTED
-        ? WiFi.localIP().toString().c_str()
-        : "DISCONNECTED");
+    drawDisplayLine(1, "Router: ", WiFi.status() == WL_CONNECTED
+        ? "Connected"
+        : "Disconnected");
     char metrics[22];
     formatSerialClock(metrics, sizeof(metrics));
     drawDisplayLine(2, "Time: ", metrics);
@@ -281,6 +320,36 @@ void drawBoardDisplay()
         drawDisplayLine(7, "Uptime: ", metrics);
   }
   else if (displayedPage == 1)
+  {
+    display.println("IP ADDRESS");
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      const IPAddress address = WiFi.localIP();
+      char ipAddress[16];
+      snprintf(ipAddress, sizeof(ipAddress), "%u.%u.%u.%u",
+               address[0], address[1], address[2], address[3]);
+
+      char* secondSeparator = strchr(ipAddress, '.');
+      secondSeparator = strchr(secondSeparator + 1, '.');
+      const size_t firstLineLength = static_cast<size_t>(secondSeparator - ipAddress + 1);
+      char firstLine[9];
+      memcpy(firstLine, ipAddress, firstLineLength);
+      firstLine[firstLineLength] = '\0';
+      char secondLine[8];
+      snprintf(secondLine, sizeof(secondLine), "%s", secondSeparator + 1);
+
+      drawLargeIpLine(firstLine, 12);
+      drawLargeIpLine(secondLine, 39);
+    }
+    else
+    {
+      display.setTextSize(2);
+      drawCenteredDisplayText("NOT", 20);
+      drawCenteredDisplayText("CONNECTED", 40);
+    }
+    display.setTextSize(1);
+  }
+  else if (displayedPage == 2)
   {
     // The second page shows the newest cached message; the author is truncated to fit the OLED.
     if (!latestMessageAvailable)
@@ -315,7 +384,7 @@ void drawBoardDisplay()
     drawDisplayLine(1, "State: ", reolinkCamera.displayStatus());
     if (!reolinkCamera.imageAvailable())
     {
-      drawDisplayLine(2, "Snapshot: ", "No image yet");
+      drawDisplayLine(2, "Snapshot: ", "None yet");
     }
     else
     {
@@ -327,7 +396,7 @@ void drawBoardDisplay()
     drawDisplayLine(3, "Size: ", "640 x 480");
     drawDisplayLine(4, "Refresh: ", "30 seconds");
     drawDisplayLine(5, "", "Bellevue Downtown");
-    drawDisplayLine(6, "Overlays: ", "Browser only");
+    drawDisplayLine(6, "Overlay: ", "Browser only");
     drawDisplayLine(7, "Setup: ", "Use setup AP");
   }
 
