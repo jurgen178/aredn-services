@@ -1,102 +1,29 @@
 # AREDN Server for ESP32
 
-A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides separate paths for a message board and Reolink RLC-510A snapshot service without requiring external internet or central server infrastructure.
-
+A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides a message board and a Reolink RLC-510A snapshot page without requiring external internet or central server infrastructure.
 
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3227.JPG" alt="ESP32" width="500">
-
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3225.JPG" alt="ESP32" width="500">
-
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3293.JPG" alt="AREDN">
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/msg-board-www.jpg" alt="Message board" width="500">
 
-<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/msg-board-www.jpg" alt="msg board">
+## Features
 
-
-## Key Technical Features
-
-* **Resource-Conscious HTTP Polling:** The client browser polls the ESP32 every 30 seconds by default and requests only messages newer than the latest received ID when updating the feed.
-* **Socket Optimization:** Every HTTP response strictly enforces `Connection: close` headers. This immediately frees up the limited TCP sockets on the ESP32, allowing the node to serve dozens of clients simultaneously without memory exhaustion.
-* **Persistent FFat Storage:** Messages are stored as validated fixed-size binary records in the onboard Flash File System (FFat). JSON is used for import and export only.
-* **Priority Tagging & Local Filtering:** Supports user-defined priority tiers (`Green`, `Orange - Warning`, `Red - Emergency`). Message rendering and filtering are executed 100% client-side inside the browser to keep network overhead to an absolute minimum.
-* **Autonomous Node Architecture:** Features local browser-side input validation, client system clock synchronization, and JSON-based administrative logs export/import functionalities.
-
-## API Documentation
-
-The service portal is available at `/`. The message board is served at `/msg-board`, and its API is namespaced under `/msg-board/api/`. The camera snapshot page is available at `/camera`.
-
-### 1. Fetch Messages
-* **Endpoint:** `GET /msg-board/api/messages`
-* **Optional parameters:** `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, `c_time=<epoch>`
-* **Description:** Returns newest messages first. Use `after` for new messages, `before` for older messages, and `limit` to cap the page size.
-* **Response Payload Format:**
-```json
-{"r":2,"f":true,"v":true,"s":"client","e":1790968087,"p":[{"i":10,"t":1790939700,"u":"W6AM","m":"Acknowledged. ..."
-```
-
-### 2. Submit Message
-* **Endpoint:** `POST /msg-board/api/messages`
-* **Payload Format:**
-```json
-{
-  "name": "Callsign/Name",
-  "text": "Message payload",
-  "priority": "orange" 
-}
-```
+* The browser polls the message board every 30 seconds by default and requests only messages newer than the latest received ID.
+* HTTP responses use `Connection: close` to free TCP sockets promptly.
+* Messages are stored as validated fixed-size binary records in FFat. JSON is used for import and export.
+* Messages support Green, Orange (warning), and Red (emergency) priorities, with browser-side rendering and filtering.
+* The browser provides local input validation, client clock synchronization, and administrative import/export.
+* The camera snapshot is fetched once every 30 seconds by a background task, independently of the number of viewers.
 
 ## System Requirements
 
-* **Hardware:** Arduino Nano ESP32 (or equivalent ESP32 development board with sufficient flash memory mapped for FFat).
-* **Client:** Any standard modern web browser (HTML5/ES6 support required for async/await execution).
-
-## Installation
-
-There are two ways to install the firmware:
-
-### Flash directly from the web page
-
-The firmware can be flashed directly to the board from the [AREDN Server Web Flasher](https://bitfabrik.io/aredn-services-firmware/).
-
-<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/web-flasher.png" alt="web flasher" width="500">
-
-Connect the board to your computer by USB, open the page in a supported browser, and follow its instructions. After flashing, connect to the `AREDN-Server-Setup` access point and configure the router Wi-Fi as described in Wi-Fi Setup. Once Wi-Fi is configured, the board is ready to use.
-
-### Build and flash from the GitHub source
-
-You can also build and install the firmware yourself from the [GitHub source repository](https://github.com/jurgen178/aredn-services):
-
-1. Install the ESP32 board package in the Arduino IDE.
-2. Select an Arduino Nano ESP32 or a compatible ESP32 board with FFat support.
-3. Install the following libraries through the Arduino Library Manager:
-   * ESPAsyncWebServer
-   * Adafruit GFX Library
-   * Adafruit SSD1306
-4. Open `aredn-services.ino`, select the correct board and port, then upload the sketch.
-5. Connect to the `AREDN-Server-Setup` access point and configure the router Wi-Fi as described above.
-
-The service uses the ESP32's built-in `WiFi`, `Wire`, `FFat`, FreeRTOS and system libraries. `WebServer` and `ArduinoJson` are not required.
-
-### Wi-Fi Setup
-
-The device always starts the `AREDN-Server-Setup` access point, including while connected to the router Wi-Fi:
-
-* **Access point:** `AREDN-Server-Setup`
-* **Password:** `arednsetup`
-* **Setup page:** `http://192.168.4.1/setup`
-
-**Important:** The Wi-Fi setup page is only available while your phone or computer is connected to the `AREDN-Server-Setup` access point. It cannot be opened through the router Wi-Fi or the AREDN network.
-
-Connect a phone or computer to the setup access point and open the setup page.
-
-<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/wifi-setup.png" alt="wifi-setup" width="500">
-
-Scan for nearby networks and select one, or enter its SSID manually to connect to a hidden network; then enter the Wi-Fi password. The ESP32 tests the connection and saves working credentials in its non-volatile storage. If there are no saved credentials, the optional OLED displays the access point name, password, and setup address. The same setup page remains available through the access point for later changes. The Wi-Fi configuration page and API only accept requests from clients connected to that access point.
+* **Hardware:** Arduino Nano ESP32, or an equivalent ESP32 board with sufficient flash memory mapped for FFat.
+* **Client:** A modern web browser with HTML5 and ES6 support.
 
 ## Hardware
 
-The optional SSD1306 OLED is connected through the board's default I2C interface. The display address used by the sketch is `0x3C`. When connected, it cycles every five seconds through server status, newest message, and camera status including the latest snapshot age. The service can also run without the display; it reports the I2C device as unavailable and continues to start the web service.
-
-When no router Wi-Fi credentials have been saved yet, the OLED shows the setup access point name and password and the URL to open on a connected phone or computer.
+The optional SSD1306 OLED uses the board's default I2C interface and address `0x3C`. When connected, it cycles every five seconds through four screens: main server status, a large two-line IP address, the newest message, and camera status including snapshot age. The main screen shows the router connection state and Wi-Fi signal strength. If no router Wi-Fi credentials are saved, the OLED displays the setup access point name, password, and setup URL. The web service can also run without the OLED.
 
 ### OLED Wiring
 
@@ -109,27 +36,104 @@ For an Arduino Nano ESP32, connect a 4-pin I2C SSD1306 OLED as follows:
 | `SDA` | `A4` / `SDA` | I2C data |
 | `SCL` | `A5` / `SCL` | I2C clock |
 
-The display must use I2C address `0x3C`. Check the module's pin labels before connecting it; do not apply 5 V to a 3.3 V-only OLED module.
+Check the module's pin labels before connecting it. Do not apply 5 V to a 3.3 V-only OLED module.
 
-## Storage And Limits
+## Installation
 
-Messages are stored in `/messages.dat` as fixed-size records with a checksum. Replacement files are written through temporary FFat files so that normal imports, edits and deletions do not modify the active file in place.
+Choose either the web flasher or build from source.
 
-The in-memory index supports up to 4096 records. Imports currently retain at most 4095 messages; larger imports are accepted but truncated. The JSON fixtures in this project are intended for import and pagination testing.
+### Flash with the web flasher
+
+The firmware can be flashed directly to the board from the [AREDN Server Web Flasher](https://bitfabrik.io/aredn-services-firmware/).
+
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/web-flasher.png" alt="Web flasher" width="500">
+
+Connect the board to your computer by USB, open the page in a supported browser, and follow its instructions. After flashing, connect to the `AREDN-Server-Setup` access point and follow the setup steps below.
+
+### Build and flash from source
+
+You can build and install the firmware from the [GitHub source repository](https://github.com/jurgen178/aredn-services):
+
+1. Install the ESP32 board package in the Arduino IDE.
+2. Select an Arduino Nano ESP32 or a compatible ESP32 board with FFat support.
+3. Install these libraries through the Arduino Library Manager:
+   * ESPAsyncWebServer
+   * Adafruit GFX Library
+   * Adafruit SSD1306
+4. Open `aredn-services.ino`, select the correct board and port, then upload the sketch.
+5. Connect to the `AREDN-Server-Setup` access point and follow the setup steps below.
+
+The service uses the ESP32's built-in `WiFi`, `Wire`, `FFat`, FreeRTOS, and system libraries. `WebServer` and `ArduinoJson` are not required.
+
+## Setup
+
+The device always starts the `AREDN-Server-Setup` access point, including while connected to router Wi-Fi:
+
+* **Access point:** `AREDN-Server-Setup`
+* **Password:** `arednsetup`
+* **Setup page:** `http://192.168.4.1/setup`
+
+Connect a phone or computer to the setup access point and open the setup page. The setup pages and configuration APIs are available only through this access point, not through router Wi-Fi or the AREDN network.
+
+### Wi-Fi Setup
+
+<img src="https://github.com/jurgen178/aredn-services/blob/main/doc/wifi-setup.png" alt="Wi-Fi setup" width="500">
+
+Choose Wi-Fi network on the setup page. Scan for nearby networks and select one, or enter the SSID manually for a hidden network; then enter the Wi-Fi password. A current-connection panel near the top shows the router connection status and the router and setup access point IP addresses. The ESP32 tests the connection and saves working credentials in non-volatile storage. The Wi-Fi settings can be changed later through the setup access point.
+
+### Reolink Camera Setup
+
+Open the camera setup page at `http://192.168.4.1/setup/camera` while connected to the setup access point:
+
+1. Give the RLC-510A a reserved IPv4 address on a network reachable by the ESP32.
+2. Enable the camera's HTTP port in Reolink settings. The default port is `80`; see Reolink's [port settings guide](https://support.reolink.com/articles/900000621783-How-to-Configure-Reolink-Ports-Settings/).
+3. Enter the camera IP, HTTP port, Reolink username, and password.
+
+The password is stored in ESP32 Preferences and is never returned by the setup API or sent to camera-page viewers. The camera-to-ESP32 request uses HTTP and includes the camera credentials in that local request. Use a dedicated camera account and keep the camera connection on a trusted local network; do not expose the camera's HTTP port to the mesh or Internet.
+
+## Services
+
+The service portal is available at `/`. The message board is served at `/msg-board`, with its API under `/msg-board/api/`. The camera snapshot page is available at `/camera`.
+
+### Message Board
+
+The board supports message submission, priority filtering, search, and administrative editing and import/export. Messages persist in FFat across restarts.
+
+### Camera Page
+
+The camera page shows a still JPEG snapshot. Its preview can be expanded to fullscreen in supported browsers. The SVG overlay is drawn in each visitor's browser and remains separate from the camera JPEG.
+
+The ESP32 uses Reolink's `cmd=Snap` JPEG endpoint and requests a 640×480 image. A background FreeRTOS task obtains one snapshot every 30 seconds, independently of viewer count. The latest JPEG is held in two bounded PSRAM buffers so the active image can be served while the next one is downloaded. The browser checks the status endpoint every 15 seconds and downloads the JPEG only when its version changes. Refreshing pauses while the page is hidden.
+
+Some camera firmware may ignore the requested reduced resolution. Snapshots larger than the 2 MiB buffer limit are rejected and reported in the camera status.
+
+## Storage and Limits
+
+Messages are stored in `/messages.dat` as fixed-size records with a checksum. Replacement files are written through temporary FFat files so normal imports, edits, and deletions do not modify the active file in place.
+
+The in-memory index supports up to 4096 records. Imports currently retain at most 4095 messages; larger imports are accepted but truncated. JSON fixtures in the project are intended for import and pagination testing.
 
 Supported import fields are `id`, `created_at` in UTC ISO-8601 format (`YYYY-MM-DDTHH:MM:SSZ`), `name`, `text`, and optional `priority` (`green`, `orange`, or `red`).
 
-## API
+## API Reference
 
-### Service Status
+### Message Board API
 
-`GET /api/status` returns Wi-Fi, heap, FFat and board information.
+* `GET /msg-board/api/messages` returns newest messages first. Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, and `c_time=<epoch>`.
+* `POST /msg-board/api/messages` submits a message.
+* `GET /msg-board/api/messages/export.json` downloads the complete board as JSON.
+* `GET /msg-board/api/time` returns the current device clock state.
+* `POST /msg-board/api/time` sets the device time using form field `epoch`.
 
-`GET /msg-board/api/time` returns the current device clock state.
+Example response from `GET /msg-board/api/messages`:
 
-### Admin API
+```json
+{"r":2,"f":true,"v":true,"s":"client","e":1790968087,"p":[{"i":10,"t":1790939700,"u":"W6AM","m":"Acknowledged."}]}
+```
 
-The following endpoints require the admin session cookie created by login:
+### Administration API
+
+These endpoints require the admin session cookie created by login:
 
 * `POST /msg-board/api/admin/login` with form field `password`
 * `POST /msg-board/api/admin/logout`
@@ -138,44 +142,28 @@ The following endpoints require the admin session cookie created by login:
 * `DELETE /msg-board/api/admin/messages`
 * `DELETE /msg-board/api/admin/message?id=<id>`
 * `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority`
-* `POST /msg-board/api/time` with form field `epoch`
 
-### Wi-Fi Setup API
+### Device and Setup APIs
 
-These endpoints are only available to clients connected to the `AREDN-Server-Setup` access point:
+`GET /api/status` returns Wi-Fi, heap, FFat, and board information.
+
+The following setup pages and APIs are only available to clients connected to the `AREDN-Server-Setup` access point:
 
 * `GET /setup` serves the setup selection page.
 * `GET /setup/wifi` serves the Wi-Fi configuration page.
 * `GET /setup/camera` serves the Reolink camera configuration page.
-* `GET /api/wifi/status` returns the connection state and setup/router IP addresses.
+* `GET /api/wifi/status` returns connection state and setup/router IP addresses.
 * `POST /api/wifi/scan` starts an asynchronous scan for nearby networks.
 * `GET /api/wifi/networks` returns `scanning`, `complete` with scan results, or `idle`.
 * `POST /api/wifi/config` accepts form fields `ssid` and `password`; credentials are saved after a successful connection.
+* `GET`, `POST`, and `DELETE /api/camera/config` read, save, and clear camera settings.
 
-### Export
-
-`GET /msg-board/api/messages/export.json` downloads the complete board as JSON.
-
-### Camera Service
-
-`GET /camera` serves the camera page. Its preview can be expanded to fullscreen in supported browsers. The SVG overlay is drawn in each visitor's browser and remains separate from the camera JPEG.
-
-Configure the camera while connected to the `AREDN-Server-Setup` access point:
-
-* Open `http://192.168.4.1/setup` and choose **Reolink camera**.
-* Give the RLC-510A a reserved IPv4 address on a network reachable by the ESP32.
-* Enable the camera's HTTP port in Reolink settings. The default port is `80`; see Reolink's [port settings guide](https://support.reolink.com/articles/900000621783-How-to-Configure-Reolink-Ports-Settings/).
-* Enter the camera IP, HTTP port, and a Reolink username/password. The password is stored in ESP32 Preferences and is never returned by the setup API or sent to camera-page viewers.
-
-The ESP32 uses Reolink's `cmd=Snap` JPEG endpoint and requests a 640×480 image. A background FreeRTOS task obtains one snapshot every 30 seconds, independent of viewer count. The latest JPEG is held in two bounded PSRAM buffers so the active image can be served to multiple viewers while the next one is downloaded. The browser checks the small status endpoint every 15 seconds and downloads the JPEG only when its version changes. It pauses while the page is hidden.
-
-The camera-to-ESP32 request uses HTTP and includes the camera credentials in that local request. Use a dedicated camera account and keep the camera connection on a trusted local network; do not expose the camera's HTTP port to the mesh or Internet. The camera's HTTP port must be enabled. Some camera firmware may ignore the requested reduced resolution; snapshots larger than the 2 MiB buffer limit are rejected and reported in the camera status.
+### Camera Snapshot API
 
 * `GET /camera/api/status` reports snapshot availability, age, and current state without revealing camera settings.
 * `GET /camera/image.jpg` serves the current cached JPEG. Before the first successful snapshot, it returns `503`.
-* `/setup`, `/setup/wifi`, `/setup/camera`, `GET /api/camera/config`, `POST /api/camera/config`, and `DELETE /api/camera/config` are restricted to clients connected to the setup access point.
 
-### Examples
+## Examples
 
 Submit a message:
 
@@ -196,7 +184,7 @@ Invoke-RestMethod 'http://device-address/msg-board/api/messages?limit=20'
 
 Use `after=<id>` for newer messages and `before=<id>` for older messages. Additional filters are `search=<term>` and `priority=green|orange|red|all`.
 
-## Security And Deployment
+## Security and Deployment
 
 The service uses plain HTTP and is intended for a trusted local AREDN network. It does not provide TLS. The firmware no longer requires `arduino_secrets.h`.
 
