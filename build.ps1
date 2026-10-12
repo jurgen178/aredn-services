@@ -80,7 +80,7 @@ New-Item -ItemType Directory -Path $ReleaseDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $ReleaseRoot -Force | Out-Null
 
 $PackageFiles = @(
-    "$BuildDir\aredn-msg-board.ino.bin"
+    "$BuildDir\aredn-services.ino.bin"
 )
 foreach ($PackageFile in $PackageFiles) {
     if (-not (Test-Path $PackageFile)) {
@@ -95,7 +95,7 @@ $Manifest = [ordered]@{
     board = $Board
     protocol = "dfu"
     files = @(
-        [ordered]@{ name = "aredn-msg-board.ino.bin" }
+        [ordered]@{ name = "aredn-services.ino.bin" }
     )
 }
 $Manifest | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $ReleaseDirectory "manifest.json")

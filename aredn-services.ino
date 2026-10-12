@@ -12,7 +12,10 @@
 #include <esp_system.h>
 #include "BoardPage.h"
 #include "CameraPage.h"
+#include "CameraSetupPage.h"
 #include "FfatMessageBoard.h"
+#include "ReolinkCamera.h"
+#include "SetupPage.h"
 #include "ServicePage.h"
 #include "WifiSetupPage.h"
 
@@ -47,6 +50,7 @@ AsyncWebServer server(80);
 Preferences wifiPreferences;
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 FfatMessageBoard messageBoard;
+ReolinkCamera reolinkCamera;
 // Atomic fields are read or updated from both the server task and the main loop.
 std::atomic<uint8_t> deviceTimeSource{TIME_SOURCE_UNSET};
 std::atomic<uint32_t> adminSessionToken{0};
@@ -239,7 +243,7 @@ void drawBoardDisplay()
     display.setCursor(0, 32);
     display.println("Open in browser:");
     drawDisplayLine(5, "", WiFi.softAPIP().toString().c_str());
-    display.println("/wifi");
+    display.println("/setup");
     display.println("Waiting for WiFi");
     display.display();
     return;
@@ -308,13 +312,23 @@ void drawBoardDisplay()
   else
   {
     display.println("AREDN CAMERA");
-    drawDisplayLine(1, "State: ", "Not configured");
-    drawDisplayLine(2, "View: ", "Bellevue");
-    drawDisplayLine(3, "", "Downtown");
-    drawDisplayLine(4, "Snapshot: ", "Pending");
-    drawDisplayLine(5, "Camera IP: ", "Not set");
-    drawDisplayLine(6, "Overlay: ", "Browser only");
-    drawDisplayLine(7, "", "Waiting for setup");
+    drawDisplayLine(1, "State: ", reolinkCamera.displayStatus());
+    if (!reolinkCamera.imageAvailable())
+    {
+      drawDisplayLine(2, "Snapshot: ", "No image yet");
+    }
+    else
+    {
+      char age[16];
+      snprintf(age, sizeof(age), "%lus old",
+               static_cast<unsigned long>(reolinkCamera.imageAgeSeconds()));
+      drawDisplayLine(2, "Snapshot: ", age);
+    }
+    drawDisplayLine(3, "Size: ", "640 x 480");
+    drawDisplayLine(4, "Refresh: ", "30 seconds");
+    drawDisplayLine(5, "", "Bellevue Downtown");
+    drawDisplayLine(6, "Overlays: ", "Browser only");
+    drawDisplayLine(7, "Setup: ", "Use setup AP");
   }
 
   display.display();
@@ -852,7 +866,7 @@ void handleSubmitMessage(AsyncWebServerRequest* request)
 void registerRoutes()
 {
   // Route handlers are asynchronous; long-running storage operations use the board's mutex.
-  server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest* request)
+  server.on("/setup/wifi", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     if (!isSetupApClient(request))
     {
@@ -862,6 +876,37 @@ void registerRoutes()
 
     AsyncWebServerResponse* response = request->beginResponse_P(
         200, "text/html; charset=utf-8", WIFI_SETUP_PAGE);
+    response->addHeader("Cache-Control", "no-cache, must-revalidate");
+    request->send(response);
+  });
+
+  server.on("/setup/camera", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (!isSetupApClient(request))
+    {
+      sendSetupApRequired(request);
+      return;
+    }
+    AsyncWebServerResponse* response = request->beginResponse_P(
+        200, "text/html; charset=utf-8", CAMERA_SETUP_PAGE);
+    response->addHeader("Cache-Control", "no-cache, must-revalidate");
+    request->send(response);
+  });
+
+  server.on("/setup", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (!isSetupApClient(request))
+    {
+      sendSetupApRequired(request);
+      return;
+    }
+    if (request->url() != "/setup")
+    {
+      request->send(404, "text/plain; charset=utf-8", "Not found");
+      return;
+    }
+    AsyncWebServerResponse* response = request->beginResponse_P(
+        200, "text/html; charset=utf-8", SETUP_PAGE);
     response->addHeader("Cache-Control", "no-cache, must-revalidate");
     request->send(response);
   });
@@ -1083,7 +1128,42 @@ void registerRoutes()
 
   server.on("/camera/image.jpg", HTTP_GET, [](AsyncWebServerRequest* request)
   {
-    request->send(503, "text/plain; charset=utf-8", "Camera is not configured yet");
+    reolinkCamera.handleImage(request);
+  });
+
+  server.on("/camera/api/status", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    reolinkCamera.handleStatus(request);
+  });
+
+  server.on("/api/camera/config", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (!isSetupApClient(request))
+    {
+      sendSetupApRequired(request);
+      return;
+    }
+    reolinkCamera.handleConfiguration(request);
+  });
+
+  server.on("/api/camera/config", HTTP_POST, [](AsyncWebServerRequest* request)
+  {
+    if (!isSetupApClient(request))
+    {
+      sendSetupApRequired(request);
+      return;
+    }
+    reolinkCamera.saveConfiguration(request);
+  });
+
+  server.on("/api/camera/config", HTTP_DELETE, [](AsyncWebServerRequest* request)
+  {
+    if (!isSetupApClient(request))
+    {
+      sendSetupApRequired(request);
+      return;
+    }
+    reolinkCamera.clearConfiguration(request);
   });
 
   server.on("/msg-board/api/messages/export.json", HTTP_GET, [](AsyncWebServerRequest* request)
@@ -1660,10 +1740,11 @@ void setup()
       Serial.println("No saved Wi-Fi credentials; waiting for setup through the access point");
     }
   }
-  Serial.printf("Setup page: http://%s/wifi\n", WiFi.softAPIP().toString().c_str());
+  Serial.printf("Setup page: http://%s/setup\n", WiFi.softAPIP().toString().c_str());
   Serial.println("Client time synchronization enabled");
   Serial.printf("Wi-Fi connection started (status %d)\n", static_cast<int>(WiFi.status()));
 
+  reolinkCamera.begin();
   registerRoutes();
   DefaultHeaders::Instance().addHeader("Connection", "close");
   server.begin();

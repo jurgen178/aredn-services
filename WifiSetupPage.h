@@ -33,6 +33,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
 </head>
 <body>
   <main>
+    <p><a href="/setup">← Setup home</a></p>
     <h1>AREDN Wi-Fi Setup</h1>
     <p>The device scans for nearby networks automatically. Select yours from the list or enter a hidden network name manually.</p>
     <label for="networks">Available Wi-Fi networks</label>
