@@ -26,9 +26,9 @@ $pollWorker = {
   try {
     while ([DateTime]::UtcNow -lt $deadline) {
       $endpoint = if ($afterId -eq 0) {
-        "$Uri/api/messages?limit=50"
+        "$Uri/msg-board/api/messages?limit=50"
       } else {
-        "$Uri/api/messages?after=$afterId&limit=50"
+        "$Uri/msg-board/api/messages?after=$afterId&limit=50"
       }
       $request = [System.Net.Http.HttpRequestMessage]::new(
         [System.Net.Http.HttpMethod]::Get, $endpoint)
@@ -91,7 +91,7 @@ $postWorker = {
       $content = [System.Net.Http.FormUrlEncodedContent]::new($form)
 
       try {
-        $response = $client.PostAsync("$Uri/api/messages", $content).GetAwaiter().GetResult()
+        $response = $client.PostAsync("$Uri/msg-board/api/messages", $content).GetAwaiter().GetResult()
         if ([int]$response.StatusCode -eq 202) {
           $posted++
         } else {

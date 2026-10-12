@@ -11,13 +11,15 @@
 #include <sys/time.h>
 #include <esp_system.h>
 #include "BoardPage.h"
+#include "CameraPage.h"
 #include "FfatMessageBoard.h"
+#include "ServicePage.h"
 #include "WifiSetupPage.h"
 
 namespace
 {
 // Time bounds reject uninitialized, implausible, or far-future clock values.
-constexpr char WIFI_AP_SSID[] = "AREDN-Message-Board-Setup";
+constexpr char WIFI_AP_SSID[] = "AREDN-Server-Setup";
 constexpr char WIFI_AP_PASSWORD[] = "arednsetup";
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
 constexpr uint32_t WIFI_RECONNECT_INTERVAL_MS = 10000;
@@ -1061,13 +1063,18 @@ void registerRoutes()
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     AsyncWebServerResponse* response = request->beginResponse_P(
-        200, "text/html; charset=utf-8", BOARD_PAGE);
+        200, "text/html; charset=utf-8", SERVICE_PAGE);
     response->addHeader("Cache-Control", "no-cache, must-revalidate");
     response->addHeader("Connection", "close");
     request->send(response);
   });
 
-  server.on("/api/messages/export.json", HTTP_GET, [](AsyncWebServerRequest* request)
+  server.on("/camera/image.jpg", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    request->send(503, "text/plain; charset=utf-8", "Camera is not configured yet");
+  });
+
+  server.on("/msg-board/api/messages/export.json", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     File file;
     if (!messageBoard.openReaderExclusive(file))
@@ -1088,7 +1095,7 @@ void registerRoutes()
     request->send(response);
   });
 
-  server.on("/api/admin/login", HTTP_POST, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/admin/login", HTTP_POST, [](AsyncWebServerRequest* request)
   {
     if (!request->hasParam("password", true) ||
         request->getParam("password", true)->value() != ADMIN_PASSWORD)
@@ -1111,7 +1118,7 @@ void registerRoutes()
     request->send(response);
   });
 
-  server.on("/api/admin/logout", HTTP_POST, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/admin/logout", HTTP_POST, [](AsyncWebServerRequest* request)
   {
     adminSessionToken.store(0, std::memory_order_release);
     AsyncWebServerResponse* response = request->beginResponse(
@@ -1120,7 +1127,7 @@ void registerRoutes()
     request->send(response);
   });
 
-  server.on("/api/admin/status", HTTP_GET, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/admin/status", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     request->send(200, "application/json",
                   isAdminAuthenticated(request)
@@ -1128,7 +1135,7 @@ void registerRoutes()
                       : "{\"authenticated\":false}");
   });
 
-  server.on("/api/admin/import", HTTP_POST, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/admin/import", HTTP_POST, [](AsyncWebServerRequest* request)
   {
     ImportUploadState* state = static_cast<ImportUploadState*>(request->_tempObject);
     if (!isAdminAuthenticated(request))
@@ -1212,7 +1219,7 @@ void registerRoutes()
     }
   });
 
-  server.on("/api/admin/messages", HTTP_DELETE, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/admin/messages", HTTP_DELETE, [](AsyncWebServerRequest* request)
   {
     if (!isAdminAuthenticated(request))
     {
@@ -1230,7 +1237,7 @@ void registerRoutes()
             reset ? "{\"reset\":true}" : "{\"error\":\"reset_failed\"}");
   });
 
-  server.on("/api/admin/message", HTTP_DELETE, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/admin/message", HTTP_DELETE, [](AsyncWebServerRequest* request)
   {
     if (!isAdminAuthenticated(request))
     {
@@ -1254,7 +1261,7 @@ void registerRoutes()
             deleted ? "{\"deleted\":true}" : "{\"error\":\"message_not_found\"}");
   });
 
-  server.on("/api/admin/message", HTTP_POST, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/admin/message", HTTP_POST, [](AsyncWebServerRequest* request)
   {
     if (!isAdminAuthenticated(request))
     {
@@ -1303,7 +1310,7 @@ void registerRoutes()
                       : "{\"error\":\"message_not_found\"}");
   });
 
-  server.on("/api/messages", HTTP_GET, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/messages", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     if (request->hasParam("c_time"))
     {
@@ -1402,7 +1409,7 @@ void registerRoutes()
     request->send(response);
   });
 
-  server.on("/api/time", HTTP_GET, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/time", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     char response[128];
     const bool valid = isDeviceTimeValid();
@@ -1414,7 +1421,7 @@ void registerRoutes()
     request->send(200, "application/json", response);
   });
 
-  server.on("/api/time", HTTP_POST, [](AsyncWebServerRequest* request)
+  server.on("/msg-board/api/time", HTTP_POST, [](AsyncWebServerRequest* request)
   {
     if (!isAdminAuthenticated(request))
     {
@@ -1458,7 +1465,7 @@ void registerRoutes()
     request->send(200, "application/json", "{\"valid\":true,\"source\":\"manual\"}");
   });
 
-  server.on("/api/messages", HTTP_POST, handleSubmitMessage);
+  server.on("/msg-board/api/messages", HTTP_POST, handleSubmitMessage);
 
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* request)
   {
@@ -1492,6 +1499,32 @@ void registerRoutes()
         ipAddress.c_str(),
         rssi);
     request->send(200, "application/json", response);
+  });
+
+  server.on("/msg-board", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (request->url() != "/msg-board")
+    {
+      request->send(404, "text/plain; charset=utf-8", "Not found");
+      return;
+    }
+    AsyncWebServerResponse* response = request->beginResponse_P(
+        200, "text/html; charset=utf-8", BOARD_PAGE);
+    response->addHeader("Cache-Control", "no-cache, must-revalidate");
+    request->send(response);
+  });
+
+  server.on("/camera", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (request->url() != "/camera")
+    {
+      request->send(404, "text/plain; charset=utf-8", "Not found");
+      return;
+    }
+    AsyncWebServerResponse* response = request->beginResponse_P(
+        200, "text/html; charset=utf-8", CAMERA_PAGE);
+    response->addHeader("Cache-Control", "no-cache, must-revalidate");
+    request->send(response);
   });
 
   server.onNotFound([](AsyncWebServerRequest* request)
@@ -1774,7 +1807,9 @@ void loop()
   {
     const String ipAddress = WiFi.localIP().toString();
     Serial.printf("Connected to AREDN WLAN; IP: %s\n", ipAddress.c_str());
-    Serial.printf("Message board: http://%s/\n", ipAddress.c_str());
+    Serial.printf("AREDN Server: http://%s/\n", ipAddress.c_str());
+    Serial.printf("Message board: http://%s/msg-board\n", ipAddress.c_str());
+    Serial.printf("Camera page: http://%s/camera\n", ipAddress.c_str());
     Serial.printf("Service status: http://%s/api/status\n", ipAddress.c_str());
     wasConnected = true;
   }

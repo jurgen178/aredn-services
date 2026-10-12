@@ -1,6 +1,6 @@
-# AREDN Message Board for ESP32
+# AREDN Server for ESP32
 
-A lightweight message board designed for the **AREDN (Amateur Radio Emergency Data Network)**. It runs entirely on an Arduino Nano ESP32, providing a local chat hub for radio amateurs without requiring external internet or central server infrastructure.
+A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides separate paths for the message board and camera service without requiring external internet or central server infrastructure.
 
 
 <img src="https://github.com/jurgen178/aredn-msg-board/blob/main/doc/DSC_3227.JPG" alt="ESP32" width="500">
@@ -22,8 +22,10 @@ A lightweight message board designed for the **AREDN (Amateur Radio Emergency Da
 
 ## API Documentation
 
+The service portal is available at `/`. The message board is served at `/msg-board`, and its API is namespaced under `/msg-board/api/`. The camera preview is available at `/camera`; its page currently provides an overlay preview while the camera snapshot integration is pending.
+
 ### 1. Fetch Messages
-* **Endpoint:** `GET /api/messages`
+* **Endpoint:** `GET /msg-board/api/messages`
 * **Optional parameters:** `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, `c_time=<epoch>`
 * **Description:** Returns newest messages first. Use `after` for new messages, `before` for older messages, and `limit` to cap the page size.
 * **Response Payload Format:**
@@ -32,7 +34,7 @@ A lightweight message board designed for the **AREDN (Amateur Radio Emergency Da
 ```
 
 ### 2. Submit Message
-* **Endpoint:** `POST /api/messages`
+* **Endpoint:** `POST /msg-board/api/messages`
 * **Payload Format:**
 ```json
 {
@@ -53,11 +55,11 @@ There are two ways to install the firmware:
 
 ### Flash directly from the web page
 
-The firmware can be flashed directly to the board from the [AREDN Message Board Web Flasher](https://bitfabrik.io/aredn-msg-board-firmware/).
+The firmware can be flashed directly to the board from the [AREDN Server Web Flasher](https://bitfabrik.io/aredn-msg-board-firmware/).
 
 <img src="https://github.com/jurgen178/aredn-msg-board/blob/main/doc/web-flasher.png" alt="web flasher" width="500">
 
-Connect the board to your computer by USB, open the page in a supported browser, and follow its instructions. After flashing, connect to the `AREDN-Message-Board-Setup` access point and configure the router Wi-Fi as described in Wi-Fi Setup. Once Wi-Fi is configured, the board is ready to use.
+Connect the board to your computer by USB, open the page in a supported browser, and follow its instructions. After flashing, connect to the `AREDN-Server-Setup` access point and configure the router Wi-Fi as described in Wi-Fi Setup. Once Wi-Fi is configured, the board is ready to use.
 
 ### Build and flash from the GitHub source
 
@@ -70,19 +72,19 @@ You can also build and install the firmware yourself from the [GitHub source rep
    * Adafruit GFX Library
    * Adafruit SSD1306
 4. Open `aredn-msg-board.ino`, select the correct board and port, then upload the sketch.
-5. Connect to the `AREDN-Message-Board-Setup` access point and configure the router Wi-Fi as described above.
+5. Connect to the `AREDN-Server-Setup` access point and configure the router Wi-Fi as described above.
 
 The service uses the ESP32's built-in `WiFi`, `Wire`, `FFat`, FreeRTOS and system libraries. `WebServer` and `ArduinoJson` are not required.
 
 ### Wi-Fi Setup
 
-The device always starts the `AREDN-Message-Board-Setup` access point, including while connected to the router Wi-Fi:
+The device always starts the `AREDN-Server-Setup` access point, including while connected to the router Wi-Fi:
 
-* **Access point:** `AREDN-Message-Board-Setup`
+* **Access point:** `AREDN-Server-Setup`
 * **Password:** `arednsetup`
 * **Setup page:** `http://192.168.4.1/wifi`
 
-**Important:** The Wi-Fi setup page is only available while your phone or computer is connected to the `AREDN-Message-Board-Setup` access point. It cannot be opened through the router Wi-Fi or the AREDN network.
+**Important:** The Wi-Fi setup page is only available while your phone or computer is connected to the `AREDN-Server-Setup` access point. It cannot be opened through the router Wi-Fi or the AREDN network.
 
 Connect a phone or computer to the setup access point and open the setup page.
 
@@ -123,24 +125,24 @@ Supported import fields are `id`, `created_at` in UTC ISO-8601 format (`YYYY-MM-
 
 `GET /api/status` returns Wi-Fi, heap, FFat and board information.
 
-`GET /api/time` returns the current device clock state.
+`GET /msg-board/api/time` returns the current device clock state.
 
 ### Admin API
 
 The following endpoints require the admin session cookie created by login:
 
-* `POST /api/admin/login` with form field `password`
-* `POST /api/admin/logout`
-* `GET /api/admin/status`
-* `POST /api/admin/import` with an `application/json` file body
-* `DELETE /api/admin/messages`
-* `DELETE /api/admin/message?id=<id>`
-* `POST /api/admin/message?id=<id>` with form fields `name`, `text`, and `priority`
-* `POST /api/time` with form field `epoch`
+* `POST /msg-board/api/admin/login` with form field `password`
+* `POST /msg-board/api/admin/logout`
+* `GET /msg-board/api/admin/status`
+* `POST /msg-board/api/admin/import` with an `application/json` file body
+* `DELETE /msg-board/api/admin/messages`
+* `DELETE /msg-board/api/admin/message?id=<id>`
+* `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority`
+* `POST /msg-board/api/time` with form field `epoch`
 
 ### Wi-Fi Setup API
 
-These endpoints are only available to clients connected to the `AREDN-Message-Board-Setup` access point:
+These endpoints are only available to clients connected to the `AREDN-Server-Setup` access point:
 
 * `GET /wifi` serves the Wi-Fi configuration page.
 * `GET /api/wifi/status` returns the connection state and setup/router IP addresses.
@@ -150,14 +152,20 @@ These endpoints are only available to clients connected to the `AREDN-Message-Bo
 
 ### Export
 
-`GET /api/messages/export.json` downloads the complete board as JSON.
+`GET /msg-board/api/messages/export.json` downloads the complete board as JSON.
+
+### Camera Service
+
+`GET /camera` serves the camera page. The SVG overlay is drawn in the visitor's browser and remains separate from the camera JPEG. Example line and label positions are percentages measured from the image's top-left corner, so they scale with the displayed image. The current page is a preparation preview; the Reolink snapshot connection and camera-specific overlay positions will be added after the camera is available for testing.
+
+`GET /camera/image.jpg` currently returns `503 Camera is not configured yet`.
 
 ### Examples
 
 Submit a message:
 
 ```powershell
-Invoke-WebRequest http://device-address/api/messages -Method Post -Body @{
+Invoke-WebRequest http://device-address/msg-board/api/messages -Method Post -Body @{
   name = 'W6AM'
   text = 'Acknowledged.'
   priority = 'green'    # 'green' = normal, 'orange' = important, 'red' = urgent
@@ -168,7 +176,7 @@ Invoke-WebRequest http://device-address/api/messages -Method Post -Body @{
 Read the newest messages:
 
 ```powershell
-Invoke-RestMethod 'http://device-address/api/messages?limit=20'
+Invoke-RestMethod 'http://device-address/msg-board/api/messages?limit=20'
 ```
 
 Use `after=<id>` for newer messages and `before=<id>` for older messages. Additional filters are `search=<term>` and `priority=green|orange|red|all`.

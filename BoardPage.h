@@ -90,6 +90,33 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       color: inherit;
     }
 
+    .service-nav {
+      display: flex;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .service-nav a {
+      padding: 3px 0;
+      color: #c8d9ce;
+      font-size: 0.75rem;
+      text-decoration: none;
+      opacity: 0.85;
+    }
+
+    .service-nav a:hover,
+    .service-nav a:focus-visible {
+      color: #fff;
+      opacity: 1;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .service-nav a:focus-visible {
+      outline: 3px solid #e2a34c;
+      outline-offset: 3px;
+    }
+
     .network-state {
       display: flex;
       align-items: center;
@@ -569,6 +596,9 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         <h1>Message Board</h1>
         <p class="intro">Short updates for everyone on the network.</p>
         <p class="experimental-note">EXPERIMENTAL ESP32-S3 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-msg-board" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
+        <nav class="service-nav" aria-label="Service navigation">
+          <a href="/">Services</a>
+        </nav>
       </div>
       <div class="header-indicators">
         <div class="device-clock" aria-label="Device clock">
@@ -633,7 +663,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           <h2 id="boardTitle">Latest messages</h2>
         </div>
         <div class="board-actions">
-          <a id="exportButton" class="board-action-button" href="/api/messages/export.json" download="aredn-messages.json" title="Download all stored messages as JSON">Export Messages</a>
+          <a id="exportButton" class="board-action-button" href="/msg-board/api/messages/export.json" download="aredn-messages.json" title="Download all stored messages as JSON">Export Messages</a>
         </div>
       </div>
       <p id="feedInfo" class="feed-info" aria-live="polite">Loading messages ...</p>
@@ -675,6 +705,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
   </main>
 
   <script>
+    const API_BASE = '/msg-board/api';
     const form = document.getElementById('messageForm');
     const authorInput = document.getElementById('author');
     const messageInput = document.getElementById('messageText');
@@ -759,7 +790,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     function uploadImportFile(file, totalMessages) {
       return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
-        request.open('POST', '/api/admin/import');
+        request.open('POST', `${API_BASE}/admin/import`);
         request.setRequestHeader('Content-Type', 'application/json');
         request.upload.addEventListener('progress', (event) => {
           if (!event.lengthComputable || totalMessages === 0) return;
@@ -797,8 +828,8 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         let hasMore = true;
         while (hasMore) {
           const endpoint = beforeId === 0
-            ? '/api/messages?limit=100'
-            : `/api/messages?before=${beforeId}&limit=100`;
+            ? `${API_BASE}/messages?limit=100`
+            : `${API_BASE}/messages?before=${beforeId}&limit=100`;
           const response = await fetch(endpoint, { cache: 'no-store' });
           if (!response.ok) {
             throw new Error('Export page failed');
@@ -1098,7 +1129,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     async function refreshAdminState() {
       const requestId = ++adminStateRequestId;
       try {
-        const response = await fetch('/api/admin/status', { cache: 'no-store' });
+        const response = await fetch(`${API_BASE}/admin/status`, { cache: 'no-store' });
         const data = await response.json();
         if (requestId === adminStateRequestId) {
           setAdminState(data.authenticated);
@@ -1135,7 +1166,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       if (values === null) return;
       showOperationDialog('Saving message', 'The board is writing the updated message.');
       try {
-        const response = await fetch(`/api/admin/message?id=${message.i}`, {
+        const response = await fetch(`${API_BASE}/admin/message?id=${message.i}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
@@ -1176,7 +1207,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       if (!window.confirm('Delete this message?')) return;
       showOperationDialog('Deleting message', 'The board is safely deleteing the message from its message store.');
       try {
-        const response = await fetch(`/api/admin/message?id=${id}`, { method: 'DELETE' });
+        const response = await fetch(`${API_BASE}/admin/message?id=${id}`, { method: 'DELETE' });
         if (response.status === 401) {
           setAdminState(false, 'Your admin session has expired.');
           return;
@@ -1215,15 +1246,15 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         const isIncremental = mode === 'after' && latestMessageId !== 0;
         const priorityQuery = selectedPriority === 'all'
           ? '' : `&priority=${encodeURIComponent(selectedPriority)}`;
-        let endpoint = `/api/messages?limit=50${priorityQuery}`;
+        let endpoint = `${API_BASE}/messages?limit=50${priorityQuery}`;
         if (mode === 'search') {
-          endpoint = `/api/messages?search=${encodeURIComponent(searchTerm)}&limit=50${priorityQuery}`;
+          endpoint = `${API_BASE}/messages?search=${encodeURIComponent(searchTerm)}&limit=50${priorityQuery}`;
         } else if (mode === 'full') {
-          endpoint = `/api/messages?limit=50${priorityQuery}`;
+          endpoint = `${API_BASE}/messages?limit=50${priorityQuery}`;
         } else if (isIncremental) {
-          endpoint = `/api/messages?after=${latestMessageId}&limit=50${priorityQuery}`;
+          endpoint = `${API_BASE}/messages?after=${latestMessageId}&limit=50${priorityQuery}`;
         } else if (mode === 'before' && oldestMessageId !== 0) {
-          endpoint = `/api/messages?before=${oldestMessageId}&limit=50` +
+          endpoint = `${API_BASE}/messages?before=${oldestMessageId}&limit=50` +
             (searchActive ? `&search=${encodeURIComponent(searchTerm)}` : '') + priorityQuery;
         }
         const response = await fetch(addClientTime(endpoint), { cache: 'no-store' });
@@ -1303,7 +1334,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
 
     async function submitMessage() {
       try {
-        const response = await fetch('/api/messages', {
+        const response = await fetch(`${API_BASE}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
@@ -1407,7 +1438,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     });
     adminLoginForm.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const response = await fetch('/api/admin/login', {
+      const response = await fetch(`${API_BASE}/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ password: adminPassword.value })
@@ -1423,7 +1454,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     });
 
     document.getElementById('logoutButton').addEventListener('click', async () => {
-      await fetch('/api/admin/logout', { method: 'POST' });
+      await fetch(`${API_BASE}/admin/logout`, { method: 'POST' });
       ++adminStateRequestId;
       setAdminState(false, 'Signed out.');
       await refreshMessages();
@@ -1433,7 +1464,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       if (!window.confirm('Delete all messages permanently?')) return;
       showOperationDialog('Resetting message board', 'The board is creating an empty validated store.');
       try {
-        const response = await fetch('/api/admin/messages', { method: 'DELETE' });
+        const response = await fetch(`${API_BASE}/admin/messages`, { method: 'DELETE' });
         if (!response.ok) {
           setAdminError('The message board could not be reset.');
           return;
@@ -1511,7 +1542,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
 
       const body = new URLSearchParams({ epoch: String(Math.floor(selectedTime.getTime() / 1000)) });
       try {
-        const response = await fetch('/api/time', {
+        const response = await fetch(`${API_BASE}/time`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body

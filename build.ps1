@@ -114,7 +114,7 @@ if (Test-Path $ReleaseIndexPath) {
 }
 $ReleaseEntries += [ordered]@{
     version = $Version
-    label = "AREDN Message Board"
+    label = "AREDN Server"
     url = "./releases/aredn-message-board-v$Version.zip"
 }
 ConvertTo-Json -InputObject $ReleaseEntries -Depth 4 | Set-Content $ReleaseIndexPath
