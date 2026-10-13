@@ -40,6 +40,7 @@ constexpr uint8_t TIME_SOURCE_MANUAL = 2;
 constexpr uint8_t TIME_SOURCE_CLIENT = 3;
 constexpr uint8_t CLIENT_TIME_AGREEMENT_COUNT = 3;
 constexpr int64_t CLIENT_TIME_MAX_SAMPLE_SPREAD = 10;
+constexpr uint32_t CLIENT_TIME_SAMPLE_MAX_AGE_MS = 3600UL * 1000UL;
 constexpr char ADMIN_PASSWORD[] = "aredn-admin";
 constexpr char ADMIN_COOKIE_PREFIX[] = "aredn_admin=";
 constexpr size_t ADMIN_TOKEN_LENGTH = 32;
@@ -61,8 +62,11 @@ FfatMessageBoard messageBoard;
 ReolinkCamera reolinkCamera;
 // Atomic fields are read or updated from both the server task and the main loop.
 std::atomic<uint8_t> deviceTimeSource{TIME_SOURCE_UNSET};
-std::atomic<uint32_t> boardRevision{1};
-std::atomic<uint32_t> fullRefreshRevision{0};
+// Both revision counters change together, so readers take them under one spinlock.
+// fullRefreshRevision is the revision of the last edit, delete, import, or reset.
+portMUX_TYPE boardRevisionLock = portMUX_INITIALIZER_UNLOCKED;
+uint32_t boardRevision = 1;
+uint32_t fullRefreshRevision = 0;
 std::atomic<bool> importUploadActive{false};
 std::atomic<bool> wifiCredentialsSaved{false};
 std::atomic<bool> wifiConfigRequestPending{false};
@@ -88,6 +92,7 @@ String savedWifiSsid;
 String savedWifiPassword;
 int64_t clientTimeSamples[CLIENT_TIME_AGREEMENT_COUNT]{};
 uint32_t clientTimeSampleClients[CLIENT_TIME_AGREEMENT_COUNT]{};
+uint32_t clientTimeSampleTicks[CLIENT_TIME_AGREEMENT_COUNT]{};
 uint8_t clientTimeSampleCount = 0;
 uint32_t lastReconnectAttempt = 0;
 uint32_t wifiConnectAttemptStart = 0;
@@ -464,6 +469,34 @@ bool containsSearchTerm(const char* value, const String& searchTerm)
   return false;
 }
 
+void markBoardChanged(bool requiresFullRefresh)
+{
+  // Edits and deletions cannot be fetched incrementally, so they flag every older revision.
+  portENTER_CRITICAL(&boardRevisionLock);
+  ++boardRevision;
+  if (requiresFullRefresh)
+  {
+    fullRefreshRevision = boardRevision;
+  }
+  portEXIT_CRITICAL(&boardRevisionLock);
+}
+
+void readBoardRevisions(uint32_t& revision, uint32_t& fullRefresh)
+{
+  portENTER_CRITICAL(&boardRevisionLock);
+  revision = boardRevision;
+  fullRefresh = fullRefreshRevision;
+  portEXIT_CRITICAL(&boardRevisionLock);
+}
+
+uint32_t currentBoardRevision()
+{
+  uint32_t revision;
+  uint32_t fullRefresh;
+  readBoardRevisions(revision, fullRefresh);
+  return revision;
+}
+
 bool isDeviceTimeValid()
 {
   // The platform clock's boot-time default is earlier than this accepted epoch.
@@ -492,33 +525,60 @@ void resetClientTimeSamples()
   clientTimeSampleCount = 0;
 }
 
-bool addClientTimeSample(int64_t epoch, uint32_t clientAddress)
+void pruneExpiredClientTimeSamples(uint32_t nowMs)
 {
-  // Do not let one client satisfy the multi-client agreement threshold repeatedly.
+  uint8_t kept = 0;
+  for (uint8_t index = 0; index < clientTimeSampleCount; ++index)
+  {
+    if (nowMs - clientTimeSampleTicks[index] > CLIENT_TIME_SAMPLE_MAX_AGE_MS)
+    {
+      continue;
+    }
+    clientTimeSamples[kept] = clientTimeSamples[index];
+    clientTimeSampleClients[kept] = clientTimeSampleClients[index];
+    clientTimeSampleTicks[kept] = clientTimeSampleTicks[index];
+    ++kept;
+  }
+  clientTimeSampleCount = kept;
+}
+
+int64_t clientTimeSampleEpochNow(uint8_t index, uint32_t nowMs)
+{
+  // A sample is a browser timestamp from the past; advance it by the time that has elapsed since
+  // it arrived so samples collected minutes apart can be compared and applied as "now".
+  const uint32_t elapsedMs = nowMs - clientTimeSampleTicks[index];
+  return clientTimeSamples[index] + static_cast<int64_t>((elapsedMs + 500) / 1000);
+}
+
+void addClientTimeSample(int64_t epoch, uint32_t clientAddress, uint32_t nowMs)
+{
+  pruneExpiredClientTimeSamples(nowMs);
+
+  // Keep one sample per client so a single client cannot satisfy the agreement threshold
+  // repeatedly; a repeat submission replaces that client's older sample with the fresh one.
   for (uint8_t index = 0; index < clientTimeSampleCount; ++index)
   {
     if (clientTimeSampleClients[index] == clientAddress)
     {
-      return false;
+      clientTimeSamples[index] = epoch;
+      clientTimeSampleTicks[index] = nowMs;
+      return;
     }
   }
 
-  if (clientTimeSampleCount < CLIENT_TIME_AGREEMENT_COUNT)
-  {
-    clientTimeSamples[clientTimeSampleCount] = epoch;
-    clientTimeSampleClients[clientTimeSampleCount++] = clientAddress;
-  }
-  else
+  if (clientTimeSampleCount == CLIENT_TIME_AGREEMENT_COUNT)
   {
     for (uint8_t index = 1; index < CLIENT_TIME_AGREEMENT_COUNT; ++index)
     {
       clientTimeSamples[index - 1] = clientTimeSamples[index];
       clientTimeSampleClients[index - 1] = clientTimeSampleClients[index];
+      clientTimeSampleTicks[index - 1] = clientTimeSampleTicks[index];
     }
-    clientTimeSamples[CLIENT_TIME_AGREEMENT_COUNT - 1] = epoch;
-    clientTimeSampleClients[CLIENT_TIME_AGREEMENT_COUNT - 1] = clientAddress;
+    --clientTimeSampleCount;
   }
-  return true;
+  clientTimeSamples[clientTimeSampleCount] = epoch;
+  clientTimeSampleClients[clientTimeSampleCount] = clientAddress;
+  clientTimeSampleTicks[clientTimeSampleCount++] = nowMs;
 }
 
 bool synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
@@ -568,34 +628,36 @@ bool synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
   if (manualTime || difference > CLIENT_TIME_MAX_SAMPLE_SPREAD)
   {
     // A large correction, or any correction after manual setup, needs distinct-client agreement.
-    if (!addClientTimeSample(clientEpoch, clientAddress))
-    {
-      xSemaphoreGive(clientTimeMutex);
-      return true;
-    }
+    const uint32_t nowMs = millis();
+    addClientTimeSample(clientEpoch, clientAddress, nowMs);
     if (clientTimeSampleCount == CLIENT_TIME_AGREEMENT_COUNT)
     {
-      int64_t lowest = clientTimeSamples[0];
-      int64_t highest = clientTimeSamples[0];
+      int64_t current[CLIENT_TIME_AGREEMENT_COUNT];
+      for (uint8_t index = 0; index < CLIENT_TIME_AGREEMENT_COUNT; ++index)
+      {
+        current[index] = clientTimeSampleEpochNow(index, nowMs);
+      }
+      int64_t lowest = current[0];
+      int64_t highest = current[0];
       for (uint8_t index = 1; index < CLIENT_TIME_AGREEMENT_COUNT; ++index)
       {
-        lowest = min(lowest, clientTimeSamples[index]);
-        highest = max(highest, clientTimeSamples[index]);
+        lowest = min(lowest, current[index]);
+        highest = max(highest, current[index]);
       }
       if (highest - lowest <= CLIENT_TIME_MAX_SAMPLE_SPREAD)
       {
         // The median limits the effect of a single outlying client timestamp.
-        int64_t median = clientTimeSamples[0];
+        int64_t median = current[0];
         for (uint8_t index = 0; index < CLIENT_TIME_AGREEMENT_COUNT; ++index)
         {
           uint8_t valuesBelow = 0;
           for (uint8_t candidate = 0; candidate < CLIENT_TIME_AGREEMENT_COUNT; ++candidate)
           {
-            valuesBelow += clientTimeSamples[candidate] < clientTimeSamples[index] ? 1 : 0;
+            valuesBelow += current[candidate] < current[index] ? 1 : 0;
           }
           if (valuesBelow == CLIENT_TIME_AGREEMENT_COUNT / 2)
           {
-            median = clientTimeSamples[index];
+            median = current[index];
             break;
           }
         }
@@ -1058,7 +1120,7 @@ void handleSubmitMessage(AsyncWebServerRequest* request)
     return;
   }
 
-  boardRevision.fetch_add(1, std::memory_order_acq_rel);
+  markBoardChanged(false);
 
   char responseBody[48];
   snprintf(responseBody, sizeof(responseBody), "{\"accepted\":true,\"id\":%lu}",
@@ -1524,8 +1586,7 @@ void registerRoutes()
         state->finished = true;
         if (!state->failed)
         {
-          const uint32_t revision = boardRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
-          fullRefreshRevision.store(revision, std::memory_order_release);
+          markBoardChanged(true);
         }
       }
     }
@@ -1541,8 +1602,7 @@ void registerRoutes()
     const bool reset = messageBoard.reset();
     if (reset)
     {
-      const uint32_t revision = boardRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
-      fullRefreshRevision.store(revision, std::memory_order_release);
+      markBoardChanged(true);
     }
     request->send(reset ? 200 : 500,
                   "application/json",
@@ -1565,8 +1625,7 @@ void registerRoutes()
     const bool deleted = messageBoard.remove(id);
     if (deleted)
     {
-      const uint32_t revision = boardRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
-      fullRefreshRevision.store(revision, std::memory_order_release);
+      markBoardChanged(true);
     }
     request->send(deleted ? 200 : 404,
                   "application/json",
@@ -1617,8 +1676,7 @@ void registerRoutes()
     const bool updated = messageBoard.update(id, name.c_str(), text.c_str(), priority);
     if (updated)
     {
-      const uint32_t revision = boardRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
-      fullRefreshRevision.store(revision, std::memory_order_release);
+      markBoardChanged(true);
     }
     request->send(updated ? 200 : 404,
                   "application/json",
@@ -1674,6 +1732,11 @@ void registerRoutes()
       }
     }
 
+    const uint32_t clientRevision = request->hasParam("rev")
+        ? request->getParam("rev")->value().toInt()
+        : 0;
+    const bool hasClientRevision = clientRevision != 0;
+
     File file;
     if (!messageBoard.openReaderExclusive(file))
     {
@@ -1685,9 +1748,15 @@ void registerRoutes()
     const time_t currentEpoch = clockValid ? time(nullptr) : 0;
     bool hasMore = false;
     AsyncResponseStream* response = request->beginResponseStream("application/json");
-    const uint32_t currentRevision = boardRevision.load(std::memory_order_acquire);
-    // Clients use these compact fields to decide whether polling can stay incremental.
-    const bool requiresFullRefresh = fullRefreshRevision.load(std::memory_order_acquire) == currentRevision;
+    uint32_t currentRevision;
+    uint32_t fullRefreshAt;
+    readBoardRevisions(currentRevision, fullRefreshAt);
+    // Clients use these compact fields to decide whether polling can stay incremental. A client
+    // reporting its last seen revision needs a full refresh when an edit or delete happened
+    // after it, or when the revision went backwards because the device restarted.
+    const bool requiresFullRefresh = hasClientRevision
+        ? clientRevision < fullRefreshAt || clientRevision > currentRevision
+        : fullRefreshAt == currentRevision;
     response->printf("{\"r\":%lu,\"f\":%s,\"v\":%s,\"s\":\"%s\",\"e\":%lld,\"p\":[",
              static_cast<unsigned long>(currentRevision),
              requiresFullRefresh ? "true" : "false",
@@ -2133,7 +2202,7 @@ void loop()
   if (displayAvailable)
   {
     // Refresh the cached latest post only when a write changes the board revision.
-    const uint32_t currentRevision = boardRevision.load(std::memory_order_acquire);
+    const uint32_t currentRevision = currentBoardRevision();
     const bool boardChanged = currentRevision != displayedBoardRevision;
     if (boardChanged)
     {

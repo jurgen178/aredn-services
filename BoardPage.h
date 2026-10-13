@@ -1251,6 +1251,8 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         const isIncremental = mode === 'after' && latestMessageId !== 0;
         const priorityQuery = selectedPriority === 'all'
           ? '' : `&priority=${encodeURIComponent(selectedPriority)}`;
+        // Reporting the last seen revision lets the device tell whether an edit or delete was missed.
+        const revisionQuery = boardRevision === null ? '' : `&rev=${boardRevision}`;
         let endpoint = `${API_BASE}/messages?limit=50${priorityQuery}`;
         if (mode === 'search') {
           endpoint = `${API_BASE}/messages?search=${encodeURIComponent(searchTerm)}&limit=50${priorityQuery}`;
@@ -1262,6 +1264,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           endpoint = `${API_BASE}/messages?before=${oldestMessageId}&limit=50` +
             (searchActive ? `&search=${encodeURIComponent(searchTerm)}` : '') + priorityQuery;
         }
+        endpoint += revisionQuery;
         const response = await fetch(endpoint, { cache: 'no-store' });
         if (!response.ok) throw new Error('Board unavailable');
         const data = await response.json();

@@ -132,7 +132,7 @@ Supported import fields are `id`, `created_at` in UTC ISO-8601 format (`YYYY-MM-
 
 ### Message Board API
 
-* `GET /msg-board/api/messages` returns newest messages first, at most 100 per request (default 20). Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, and `priority=green|orange|red|all`.
+* `GET /msg-board/api/messages` returns newest messages first, at most 100 per request (default 20). Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, and `rev=<revision>`. Clients pass the revision (`r`) of their previous response as `rev`; the response flag `f` is then `true` when a message was edited, deleted, imported, or reset after that revision (or the device restarted), and the client must reload the list instead of polling incrementally.
 * `POST /msg-board/api/messages` submits a message.
 * `GET /msg-board/api/messages/export.json` downloads the complete board as JSON; it requires an admin session.
 * `GET /msg-board/api/time` returns the current device clock state.
@@ -160,7 +160,7 @@ These endpoints require the admin session cookie created by login. The session t
 
 `GET /api/status` returns Wi-Fi, heap, FFat, and board information.
 
-`POST /api/time/sync` accepts a form field `epoch` and submits a browser time sample to the device clock. The root, camera, and message-board pages call it when opened; the message board also calls it during its periodic refresh. Large corrections and corrections after manual time setting require agreement from three distinct clients whose samples are within 10 seconds of each other.
+`POST /api/time/sync` accepts a form field `epoch` and submits a browser time sample to the device clock. The root, camera, and message-board pages call it when opened; the message board also calls it during its periodic refresh. Large corrections and corrections after manual time setting require agreement from three distinct clients whose samples are within 10 seconds of each other. Each sample is advanced by the time elapsed since it arrived, a client's newer sample replaces its older one, and samples older than one hour are discarded. Each sample is advanced by the time elapsed since it arrived, a client's newer sample replaces its older one, and samples older than one hour are discarded.
 
 The following setup pages and APIs are only available to clients connected to the `AREDN-Server-Setup` access point:
 
