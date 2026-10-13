@@ -16,7 +16,7 @@ static const char SETUP_PAGE[] PROGMEM = R"AREDN_SETUP(
     body { min-width: 320px; min-height: 100vh; margin: 0; background-image: radial-gradient(#cbd5cc 0.65px, transparent 0.65px); background-size: 16px 16px; }
     header { padding: 32px 20px; color: #f6f7f2; background: #173b33; border-bottom: 5px solid #c55b36; }
     .header-inner, main { width: min(760px, 100%); margin: 0 auto; }
-    .eyebrow { margin: 0 0 6px; color: #c8d9ce; font-size: 0.76rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .header-label { margin: 0 0 6px; color: #c8d9ce; font-size: 0.76rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
     h1 { margin: 0; font-size: clamp(1.9rem, 7vw, 2.7rem); }
     header p:last-child { margin: 10px 0 0; color: #d8e3dc; line-height: 1.5; }
     main { padding: 28px 20px; }
@@ -32,7 +32,7 @@ static const char SETUP_PAGE[] PROGMEM = R"AREDN_SETUP(
 <body>
   <header>
     <div class="header-inner">
-      <p class="eyebrow">AREDN · Device configuration</p>
+      <p class="header-label">AREDN · Device configuration</p>
       <h1>Setup</h1>
       <p>Choose what you want to configure on this server.</p>
     </div>

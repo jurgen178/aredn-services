@@ -17,6 +17,7 @@
 #include "ReolinkCamera.h"
 #include "SetupPage.h"
 #include "ServicePage.h"
+#include "ToolsPage.h"
 #include "WifiSetupPage.h"
 
 namespace
@@ -1702,6 +1703,19 @@ void registerRoutes()
     request->send(response);
   });
 
+  server.on("/tools", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (request->url() != "/tools")
+    {
+      request->send(404, "text/plain; charset=utf-8", "Not found");
+      return;
+    }
+    AsyncWebServerResponse* response = request->beginResponse_P(
+        200, "text/html; charset=utf-8", TOOLS_PAGE);
+    response->addHeader("Cache-Control", "no-cache, must-revalidate");
+    request->send(response);
+  });
+
   server.onNotFound([](AsyncWebServerRequest* request)
   {
     request->send(404, "text/plain; charset=utf-8", "Not found");
@@ -1986,6 +2000,7 @@ void loop()
     Serial.printf("AREDN Server: http://%s/\n", ipAddress.c_str());
     Serial.printf("Message board: http://%s/msg-board\n", ipAddress.c_str());
     Serial.printf("Camera page: http://%s/camera\n", ipAddress.c_str());
+    Serial.printf("Radio tools: http://%s/tools\n", ipAddress.c_str());
     Serial.printf("Service status: http://%s/api/status\n", ipAddress.c_str());
     wasConnected = true;
   }

@@ -57,7 +57,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       gap: 24px;
     }
 
-    .eyebrow {
+    .header-label {
       margin: 0 0 8px;
       color: #c8d9ce;
       font-size: 0.76rem;
@@ -65,18 +65,18 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       text-transform: uppercase;
     }
 
-    .eyebrow-link {
+    .header-label-link {
       color: inherit;
       text-decoration: none;
     }
 
-    .eyebrow-link:hover,
-    .eyebrow-link:focus-visible {
+    .header-label-link:hover,
+    .header-label-link:focus-visible {
       text-decoration: underline;
       text-underline-offset: 3px;
     }
 
-    .eyebrow-link:focus-visible {
+    .header-label-link:focus-visible {
       outline: 2px solid #e2a34c;
       outline-offset: 3px;
     }
@@ -581,10 +581,10 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
   <header class="topbar">
     <div class="topbar-inner">
       <div>
-        <p class="eyebrow"><a class="eyebrow-link" href="/" title="Open the AREDN services portal">AREDN · Local message service</a></p>
+        <p class="header-label"><a class="header-label-link" href="/" title="Open the AREDN services portal">AREDN · Local message service</a></p>
         <h1>Message Board</h1>
         <p class="intro">Short updates for everyone on the network.</p>
-        <p class="experimental-note">EXPERIMENTAL ESP32-S3 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
+        <p class="experimental-note">EXPERIMENTAL ESP32 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
       </div>
       <div class="header-indicators">
         <div class="device-clock" aria-label="Device clock">

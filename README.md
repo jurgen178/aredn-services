@@ -1,6 +1,6 @@
 # AREDN Server for ESP32
 
-A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides a message board and a camera snapshot page without requiring external internet or central server infrastructure.
+An experimental lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides a message board, a camera snapshot page, and browser-based radio calculators without requiring external internet or central server infrastructure.
 
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3293.JPG" alt="AREDN">
 
@@ -14,6 +14,7 @@ A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Net
 * Messages support Green, Orange (warning), and Red (emergency) priorities, with browser-side rendering and filtering.
 * All service pages synchronize the device clock from the visiting browser; the message board also periodically corrects clock drift.
 * The camera snapshot is fetched once every 30 seconds by a background task, independently of the number of viewers.
+* Radio Tools provides browser-side Maidenhead locator and radio link-budget calculators without additional ESP32 processing.
 
 ## System Requirements
 
@@ -96,19 +97,28 @@ The password is stored in ESP32 Preferences and is never returned by the setup A
 
 ## Services
 
-The service portal is available at `/`. The message board is served at `/msg-board`, with its API under `/msg-board/api/`. The camera snapshot page is available at `/camera`.
+The service portal is available at `/`. The message board is served at `/msg-board`, with its API under `/msg-board/api/`. The camera snapshot page is available at `/camera`. Radio Tools is available at `/tools`.
 
 ### Message Board
 
 The board supports message submission, priority filtering, search, and administrative editing and import/export. Messages persist in FFat across restarts.
 
-### Camera Page
+### Camera Snapshot
 
-The camera page shows a still JPEG snapshot. Its preview can be expanded to fullscreen in supported browsers. The SVG overlay is drawn in each visitor's browser and remains separate from the camera JPEG.
+The Camera Snapshot page shows a still JPEG image, refreshed about every 30 seconds. Its preview can be expanded to fullscreen in supported browsers. The SVG overlay is drawn in each visitor's browser and remains separate from the camera JPEG.
 
 The ESP32 uses Reolink's `cmd=Snap` JPEG endpoint and requests a 640×480 image. A background FreeRTOS task obtains one snapshot every 30 seconds, independently of viewer count. The latest JPEG is held in two bounded PSRAM buffers so the active image can be served while the next one is downloaded. The browser checks the status endpoint every 15 seconds and downloads the JPEG only when its version changes. Refreshing pauses while the page is hidden.
 
 Some camera firmware may ignore the requested reduced resolution. Snapshots larger than the 2 MiB buffer limit are rejected and reported in the camera status.
+
+### Radio Tools
+
+The Radio Tools page contains two client-side calculators, in this order:
+
+* **Maidenhead Locator** accepts even-length locators from 2 to 12 characters and estimates the distance, initial bearing, and center coordinates between them.
+* **Link Budget Calculator** estimates transmit EIRP, free-space path loss, received signal level, and link margin from frequency, distance, transmit power, antenna gains, feedline losses, and receiver sensitivity.
+
+Calculations run in the visitor's browser; the ESP32 only serves the page. Link-budget results are free-space estimates and do not model terrain, obstacles, Fresnel-zone clearance, interference, polarization, or weather.
 
 ## Storage and Limits
 
@@ -167,6 +177,10 @@ The following setup pages and APIs are only available to clients connected to th
 
 * `GET /camera/api/status` reports snapshot availability, age, and current state without revealing camera settings.
 * `GET /camera/image.jpg` serves the current cached JPEG. Before the first successful snapshot, it returns `503`.
+
+### Radio Tools
+
+* `GET /tools` serves the browser-based Maidenhead Locator and Link Budget Calculator page. The calculators do not use additional API endpoints.
 
 ## Examples
 

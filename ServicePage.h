@@ -35,7 +35,7 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
       width: min(900px, 100%);
       margin: 0 auto;
     }
-    .eyebrow {
+    .header-label {
       margin: 0 0 8px;
       color: #c8d9ce;
       font-size: 0.76rem;
@@ -50,6 +50,13 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
       color: #d8e3dc;
       line-height: 1.5;
     }
+    header p.experimental-note {
+      margin: 8px 0 0;
+      color: #e2a34c;
+      font-size: 0.72rem;
+      line-height: 1.35;
+    }
+    .experimental-note a { color: inherit; }
     main { padding: 34px 24px; }
     .services {
       display: grid;
@@ -96,9 +103,10 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
 <body>
   <header>
     <div class="header-inner">
-      <p class="eyebrow">AREDN · Local services</p>
+      <p class="header-label">AREDN · Local services</p>
       <h1>AREDN Server</h1>
       <p>Choose a service available on this local AREDN node.</p>
+      <p class="experimental-note">EXPERIMENTAL ESP32 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
     </div>
   </header>
   <main>
@@ -110,8 +118,13 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
       </a>
       <a class="service" href="/camera">
         <span class="service-mark" aria-hidden="true">C</span>
-        <h2>Camera</h2>
-        <p>View the local camera page and its configured overlays.</p>
+        <h2>Camera Snapshot</h2>
+        <p>View the latest image from Bellevue Downtown, refreshed about every 30 seconds.</p>
+      </a>
+      <a class="service" href="/tools">
+        <span class="service-mark" aria-hidden="true">T</span>
+        <h2>Radio Tools</h2>
+        <p>Calculate Maidenhead locator distances and radio link budgets.</p>
       </a>
     </nav>
     <footer>Services are hosted locally by the AREDN Server.</footer>
