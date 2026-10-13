@@ -752,6 +752,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     let oldestMessageId = 0;
     let moreMessagesAvailable = false;
     let boardRevision = null;
+    let boardBootId = null;
     let refreshRequested = false;
     let requestedRefreshMode = 'after';
     let viewGeneration = 0;
@@ -1251,8 +1252,10 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         const isIncremental = mode === 'after' && latestMessageId !== 0;
         const priorityQuery = selectedPriority === 'all'
           ? '' : `&priority=${encodeURIComponent(selectedPriority)}`;
-        // Reporting the last seen revision lets the device tell whether an edit or delete was missed.
-        const revisionQuery = boardRevision === null ? '' : `&rev=${boardRevision}`;
+        // Reporting both values lets the device detect missed edits and restarts.
+        const revisionQuery = boardRevision === null || boardBootId === null
+          ? ''
+          : `&rev=${boardRevision}&boot=${encodeURIComponent(boardBootId)}`;
         let endpoint = `${API_BASE}/messages?limit=50${priorityQuery}`;
         if (mode === 'search') {
           endpoint = `${API_BASE}/messages?search=${encodeURIComponent(searchTerm)}&limit=50${priorityQuery}`;
@@ -1271,14 +1274,16 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         if (requestGeneration !== viewGeneration) {
           return;
         }
-        const revisionChanged = boardRevision !== null && data.r !== boardRevision;
-        if (revisionChanged && data.f && mode !== 'full') {
+        const revisionChanged = boardRevision !== null &&
+          (data.r !== boardRevision || data.b !== boardBootId);
+        if (revisionChanged && data.f && mode !== 'full' && mode !== 'search') {
           refreshInProgress = false;
           updateLoadMoreState();
           await refreshMessages(mode === 'search' ? 'search' : 'full');
           return;
         }
         boardRevision = data.r;
+        boardBootId = data.b;
         const appendPage = mode === 'before';
         mergeMessages(data.p, !appendPage &&
           (mode === 'full' || mode === 'search' || !isIncremental));

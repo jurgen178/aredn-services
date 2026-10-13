@@ -47,6 +47,7 @@ constexpr size_t ADMIN_TOKEN_LENGTH = 32;
 constexpr uint32_t ADMIN_SESSION_LIFETIME_MS = 3600UL * 1000UL;
 constexpr uint8_t ADMIN_LOGIN_MAX_FAILURES = 5;
 constexpr uint32_t ADMIN_LOGIN_LOCKOUT_MS = 60000;
+constexpr size_t BOARD_BOOT_ID_LENGTH = 16;
 constexpr uint8_t OLED_WIDTH = 128;
 constexpr uint8_t OLED_HEIGHT = 64;
 constexpr int8_t OLED_RESET = -1;
@@ -67,6 +68,7 @@ std::atomic<uint8_t> deviceTimeSource{TIME_SOURCE_UNSET};
 portMUX_TYPE boardRevisionLock = portMUX_INITIALIZER_UNLOCKED;
 uint32_t boardRevision = 1;
 uint32_t fullRefreshRevision = 0;
+char deviceBootId[BOARD_BOOT_ID_LENGTH + 1]{};
 std::atomic<bool> importUploadActive{false};
 std::atomic<bool> wifiCredentialsSaved{false};
 std::atomic<bool> wifiConfigRequestPending{false};
@@ -479,6 +481,15 @@ void markBoardChanged(bool requiresFullRefresh)
     fullRefreshRevision = boardRevision;
   }
   portEXIT_CRITICAL(&boardRevisionLock);
+}
+
+void initializeDeviceBootId()
+{
+  const uint32_t high = esp_random();
+  const uint32_t low = esp_random();
+  snprintf(deviceBootId, sizeof(deviceBootId), "%08lx%08lx",
+           static_cast<unsigned long>(high),
+           static_cast<unsigned long>(low));
 }
 
 void readBoardRevisions(uint32_t& revision, uint32_t& fullRefresh)
@@ -1735,7 +1746,10 @@ void registerRoutes()
     const uint32_t clientRevision = request->hasParam("rev")
         ? request->getParam("rev")->value().toInt()
         : 0;
-    const bool hasClientRevision = clientRevision != 0;
+    const bool hasClientRevision = request->hasParam("rev") && clientRevision != 0;
+    const String clientBootId = request->hasParam("boot")
+        ? request->getParam("boot")->value()
+        : String();
 
     File file;
     if (!messageBoard.openReaderExclusive(file))
@@ -1755,10 +1769,13 @@ void registerRoutes()
     // reporting its last seen revision needs a full refresh when an edit or delete happened
     // after it, or when the revision went backwards because the device restarted.
     const bool requiresFullRefresh = hasClientRevision
-        ? clientRevision < fullRefreshAt || clientRevision > currentRevision
+        ? clientBootId != deviceBootId ||
+          clientRevision < fullRefreshAt ||
+          clientRevision > currentRevision
         : fullRefreshAt == currentRevision;
-    response->printf("{\"r\":%lu,\"f\":%s,\"v\":%s,\"s\":\"%s\",\"e\":%lld,\"p\":[",
+    response->printf("{\"r\":%lu,\"b\":\"%s\",\"f\":%s,\"v\":%s,\"s\":\"%s\",\"e\":%lld,\"p\":[",
              static_cast<unsigned long>(currentRevision),
+             deviceBootId,
              requiresFullRefresh ? "true" : "false",
                      clockValid ? "true" : "false",
                      deviceTimeSourceName(),
@@ -2075,6 +2092,7 @@ void setup()
   Serial.println("Client time synchronization enabled");
   Serial.printf("Wi-Fi connection started (status %d)\n", static_cast<int>(WiFi.status()));
 
+  initializeDeviceBootId();
   reolinkCamera.begin();
   registerRoutes();
   DefaultHeaders::Instance().addHeader("Connection", "close");
