@@ -1449,7 +1449,9 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         body: new URLSearchParams({ password: adminPassword.value })
       });
       if (!response.ok) {
-        setAdminError('Invalid administrator password.');
+        setAdminError(response.status === 429
+          ? 'Too many failed attempts. Try again in a minute.'
+          : 'Invalid administrator password.');
         return;
       }
       adminPassword.value = '';

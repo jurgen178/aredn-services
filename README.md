@@ -132,9 +132,9 @@ Supported import fields are `id`, `created_at` in UTC ISO-8601 format (`YYYY-MM-
 
 ### Message Board API
 
-* `GET /msg-board/api/messages` returns newest messages first. Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, and `priority=green|orange|red|all`.
+* `GET /msg-board/api/messages` returns newest messages first, at most 100 per request (default 20). Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, and `priority=green|orange|red|all`.
 * `POST /msg-board/api/messages` submits a message.
-* `GET /msg-board/api/messages/export.json` downloads the complete board as JSON.
+* `GET /msg-board/api/messages/export.json` downloads the complete board as JSON; it requires an admin session.
 * `GET /msg-board/api/time` returns the current device clock state.
 * `POST /msg-board/api/time` sets the device time manually using form field `epoch`; it requires an admin session.
 
@@ -146,15 +146,15 @@ Example response from `GET /msg-board/api/messages`:
 
 ### Administration API
 
-These endpoints require the admin session cookie created by login:
+These endpoints require the admin session cookie created by login. The session token is random, expires after one hour, and login is blocked for one minute after five failed attempts:
 
 * `POST /msg-board/api/admin/login` with form field `password`
-* `POST /msg-board/api/admin/logout`
+* `POST /msg-board/api/admin/logout` (admin session required)
 * `GET /msg-board/api/admin/status`
 * `POST /msg-board/api/admin/import` with an `application/json` file body
 * `DELETE /msg-board/api/admin/messages`
 * `DELETE /msg-board/api/admin/message?id=<id>`
-* `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority`
+* `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority` (all required)
 
 ### Device and Setup APIs
 
