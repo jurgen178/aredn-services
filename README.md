@@ -153,6 +153,8 @@ These endpoints require the admin session cookie created by login. The session t
 * `GET /msg-board/api/admin/status`
 * `POST /msg-board/api/admin/import` with an `application/json` file body; the successful response includes the number of imported messages
 * `DELETE /msg-board/api/admin/messages`
+* `POST /msg-board/api/admin/format/prepare` starts the time-limited confirmation for a full FFat reset
+* `POST /msg-board/api/admin/format` erases the whole FFat partition like a new board after the challenge and exact `FORMAT FFAT` confirmation are supplied; the request can take up to two minutes, and this deletes all FFat files but does not delete Preferences data
 * `DELETE /msg-board/api/admin/message?id=<id>`
 * `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority` (all required)
 

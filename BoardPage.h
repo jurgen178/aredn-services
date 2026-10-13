@@ -683,6 +683,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       <div id="adminControls" class="admin-controls" hidden>
         <button id="resetButton" type="button">Reset all messages</button>
         <button id="importButton" class="admin-secondary" type="button">Import Messages</button>
+        <button id="formatButton" class="admin-secondary" type="button">Format FFat (Recovery)</button>
         <input id="importFile" type="file" accept="application/json,.json" hidden>
         <button id="logoutButton" class="admin-secondary" type="button">Sign out</button>
       </div>
@@ -723,6 +724,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     const adminControls = document.getElementById('adminControls');
     const adminStatus = document.getElementById('adminStatus');
     const importButton = document.getElementById('importButton');
+    const formatButton = document.getElementById('formatButton');
     const importFile = document.getElementById('importFile');
     const exportButton = document.getElementById('exportButton');
     const operationDialog = document.getElementById('operationDialog');
@@ -1545,6 +1547,62 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         hideOperationDialog();
       }
     });
+
+    formatButton.addEventListener('click', async () => {
+      if (!window.confirm(
+        'This will permanently delete every file on the FFat volume, including all messages. The board will not respond for up to two minutes. Continue?'
+      )) return;
+
+      let challenge;
+      try {
+        const prepareResponse = await fetch(`${API_BASE}/admin/format/prepare`, { method: 'POST' });
+        if (prepareResponse.status === 401) {
+          setAdminState(false, 'Your admin session has expired.');
+          return;
+        }
+        if (!prepareResponse.ok) {
+          setAdminError('The FFat recovery confirmation could not be started.');
+          return;
+        }
+        challenge = (await prepareResponse.json()).challenge;
+      } catch (error) {
+        setAdminError('The FFat recovery confirmation could not be started.');
+        return;
+      }
+
+      const confirmation = window.prompt(
+        'This is a full FFat reset. Type FORMAT FFAT exactly to continue.'
+      );
+      if (confirmation !== 'FORMAT FFAT' ||
+          !window.confirm('Final confirmation: format FFat and delete all messages now?')) {
+        adminStatus.textContent = 'FFat formatting canceled.';
+        return;
+      }
+
+      showOperationDialog('Formatting FFat', 'The whole FFat partition is being erased and recreated. This can take up to two minutes; do not power off the board.');
+      try {
+        const response = await fetch(`${API_BASE}/admin/format`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ challenge, confirmation })
+        });
+        if (response.status === 401) {
+          setAdminState(false, 'Your admin session has expired.');
+          return;
+        }
+        if (!response.ok) {
+          setAdminError('FFat formatting failed. The message store may be unavailable; check the board before retrying.');
+          return;
+        }
+        await refreshMessages('full');
+        adminStatus.textContent = 'FFat formatted; all messages deleted.';
+      } catch (error) {
+        setAdminError('FFat formatting status could not be determined.');
+      } finally {
+        hideOperationDialog();
+      }
+    });
+
     deviceDateTime.value = formatLocalDateTime(new Date());
 
     clockForm.addEventListener('submit', async (event) => {

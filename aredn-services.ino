@@ -47,6 +47,8 @@ constexpr size_t ADMIN_TOKEN_LENGTH = 32;
 constexpr uint32_t ADMIN_SESSION_LIFETIME_MS = 3600UL * 1000UL;
 constexpr uint8_t ADMIN_LOGIN_MAX_FAILURES = 5;
 constexpr uint32_t ADMIN_LOGIN_LOCKOUT_MS = 60000;
+constexpr char FFAT_FORMAT_CONFIRMATION[] = "FORMAT FFAT";
+constexpr uint32_t FFAT_FORMAT_CHALLENGE_LIFETIME_MS = 60000;
 constexpr size_t BOARD_BOOT_ID_LENGTH = 16;
 constexpr uint8_t OLED_WIDTH = 128;
 constexpr uint8_t OLED_HEIGHT = 64;
@@ -84,6 +86,9 @@ uint32_t adminSessionStart = 0;
 uint8_t adminLoginFailures = 0;
 bool adminLoginLocked = false;
 uint32_t adminLoginLockStart = 0;
+char ffatFormatChallenge[ADMIN_TOKEN_LENGTH + 1]{};
+bool ffatFormatChallengeActive = false;
+uint32_t ffatFormatChallengeStart = 0;
 SemaphoreHandle_t wifiConfigMutex = nullptr;
 SemaphoreHandle_t wifiScanMutex = nullptr;
 char requestedWifiSsid[33]{};
@@ -881,6 +886,47 @@ bool startAdminSession(char* tokenOut)
   xSemaphoreGive(adminMutex);
   memcpy(tokenOut, token, sizeof(token));
   return true;
+}
+
+bool startFfatFormatChallenge(char* challengeOut)
+{
+  char challenge[ADMIN_TOKEN_LENGTH + 1];
+  for (size_t part = 0; part < ADMIN_TOKEN_LENGTH / 8; ++part)
+  {
+    snprintf(challenge + part * 8, 9, "%08lx", static_cast<unsigned long>(esp_random()));
+  }
+
+  if (adminMutex == nullptr || xSemaphoreTake(adminMutex, portMAX_DELAY) != pdTRUE)
+  {
+    return false;
+  }
+  memcpy(ffatFormatChallenge, challenge, sizeof(ffatFormatChallenge));
+  ffatFormatChallengeActive = true;
+  ffatFormatChallengeStart = millis();
+  xSemaphoreGive(adminMutex);
+  memcpy(challengeOut, challenge, sizeof(challenge));
+  return true;
+}
+
+bool consumeFfatFormatChallenge(const char* challenge, const char* confirmation)
+{
+  if (challenge == nullptr || confirmation == nullptr ||
+      !constantTimeEquals(confirmation, FFAT_FORMAT_CONFIRMATION) ||
+      adminMutex == nullptr || xSemaphoreTake(adminMutex, portMAX_DELAY) != pdTRUE)
+  {
+    return false;
+  }
+
+  const bool valid = ffatFormatChallengeActive &&
+      millis() - ffatFormatChallengeStart < FFAT_FORMAT_CHALLENGE_LIFETIME_MS &&
+      constantTimeEquals(challenge, ffatFormatChallenge);
+  if (valid)
+  {
+    ffatFormatChallengeActive = false;
+    memset(ffatFormatChallenge, 0, sizeof(ffatFormatChallenge));
+  }
+  xSemaphoreGive(adminMutex);
+  return valid;
 }
 
 void endAdminSession()
@@ -1724,6 +1770,59 @@ void registerRoutes()
             updated
                       ? "{\"updated\":true}"
                       : "{\"error\":\"message_not_found\"}");
+  });
+
+  server.on("/msg-board/api/admin/format/prepare", HTTP_POST,
+            [](AsyncWebServerRequest* request)
+  {
+    if (!isAdminAuthenticated(request))
+    {
+      sendAdminRequired(request);
+      return;
+    }
+
+    char challenge[ADMIN_TOKEN_LENGTH + 1];
+    if (!startFfatFormatChallenge(challenge))
+    {
+      request->send(503, "application/json", "{\"error\":\"format_unavailable\"}");
+      return;
+    }
+
+    char response[96];
+    snprintf(response, sizeof(response), "{\"challenge\":\"%s\"}", challenge);
+    request->send(200, "application/json", response);
+  });
+
+  server.on("/msg-board/api/admin/format", HTTP_POST,
+            [](AsyncWebServerRequest* request)
+  {
+    if (!isAdminAuthenticated(request))
+    {
+      sendAdminRequired(request);
+      return;
+    }
+    if (!request->hasParam("challenge", true) ||
+        !request->hasParam("confirmation", true))
+    {
+      request->send(400, "application/json", "{\"error\":\"missing_confirmation\"}");
+      return;
+    }
+
+    const String challenge = request->getParam("challenge", true)->value();
+    const String confirmation = request->getParam("confirmation", true)->value();
+    if (!consumeFfatFormatChallenge(challenge.c_str(), confirmation.c_str()))
+    {
+      request->send(400, "application/json", "{\"error\":\"invalid_confirmation\"}");
+      return;
+    }
+
+    if (!messageBoard.format())
+    {
+      request->send(500, "application/json", "{\"error\":\"format_failed\"}");
+      return;
+    }
+    markBoardChanged(true);
+    request->send(200, "application/json", "{\"formatted\":true,\"messages\":0}");
   });
 
   server.on("/msg-board/api/messages", HTTP_GET, [](AsyncWebServerRequest* request)

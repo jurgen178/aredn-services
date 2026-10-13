@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <ctime>
 #include <new>
+#include <esp_partition.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <esp_task_wdt.h>
@@ -17,6 +18,7 @@ public:
   // The live file is append-only; temporary paths support atomic-style repair and replacement.
   static constexpr const char* FILE_PATH = "/messages.dat";
   static constexpr const char* REPAIR_PATH = "/messages.repair";
+  static constexpr const char* PROBE_PATH = "/write.probe";
   static constexpr const char* BACKUP_PATH = "/messages.backup";
   static constexpr const char* IMPORT_PATH = "/messages.import";
   static constexpr size_t MAX_NAME_LENGTH = 32;
@@ -49,18 +51,67 @@ public:
   };
 
   // Mount FFat, allocate the bounded index, and repair valid data during startup.
+  // If the volume cannot be mounted, loaded, or written, reformat it so the board repairs itself.
   bool begin()
   {
-    messageCount_ = 0;
-    nextId_ = 1;
     if (mutex_ == nullptr)
     {
       mutex_ = xSemaphoreCreateMutex();
     }
-    if (mutex_ == nullptr || !FFat.begin(false))
+    if (mutex_ == nullptr)
     {
       return false;
     }
+    if (loadStorage())
+    {
+      return true;
+    }
+    if (indexCapacity_ > 0 && index_ == nullptr)
+    {
+      // Out of memory is not a storage fault, so never format a healthy volume for it.
+      return false;
+    }
+
+    Serial.println("FFat is damaged; reformatting the volume");
+    FFat.end();
+    FFat.format();
+    if (loadStorage())
+    {
+      return true;
+    }
+
+    // The wear-levelling layer itself is damaged, so erase the whole partition.
+    Serial.println("FFat is still unusable; erasing the whole FFat partition (this can take a while)");
+    FFat.end();
+    return wipeFfatPartition() && loadStorage();
+  }
+
+  bool loadStorage()
+  {
+    messageCount_ = 0;
+    nextId_ = 1;
+    if (!FFat.begin(true))
+    {
+      return false;
+    }
+    if (!loadMessages())
+    {
+      return false;
+    }
+
+    // A volume can mount and still reject writes, so prove it before accepting it.
+    File probe = FFat.open(PROBE_PATH, FILE_WRITE);
+    const bool writable = probe && probe.write('x') == 1;
+    if (probe)
+    {
+      probe.close();
+    }
+    FFat.remove(PROBE_PATH);
+    return writable;
+  }
+
+  bool loadMessages()
+  {
     if (index_ == nullptr)
     {
       const size_t storageCapacity = FFat.totalBytes() / sizeof(DiskRecord);
@@ -212,7 +263,7 @@ public:
 
   bool ready() const
   {
-    return mutex_ != nullptr && index_ != nullptr &&
+    return mutex_ != nullptr && !storageBusy_ && index_ != nullptr &&
            indexCapacity_ > 0 && FFat.totalBytes() > 0;
   }
 
@@ -313,6 +364,32 @@ public:
       clearIndex();
       nextId_ = 1;
     }
+    xSemaphoreGive(mutex_);
+    return success;
+  }
+
+  // Format the FFat volume and recreate the empty message store.
+  bool format()
+  {
+    if (mutex_ == nullptr || importInProgress_ ||
+        xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
+    {
+      return false;
+    }
+
+    appendFile_.close();
+    importFile_.close();
+    storageBusy_ = true;
+    FFat.end();
+    // Erase the whole partition, including the wear-levelling metadata, like a brand-new board.
+    bool success = wipeFfatPartition() && loadStorage();
+    if (!success)
+    {
+      FFat.end();
+      FFat.format();
+      success = loadStorage();
+    }
+    storageBusy_ = false;
     xSemaphoreGive(mutex_);
     return success;
   }
@@ -498,17 +575,17 @@ public:
 
   size_t usedBytes() const
   {
-    return FFat.usedBytes();
+    return storageBusy_ ? 0 : FFat.usedBytes();
   }
 
   size_t totalBytes() const
   {
-    return FFat.totalBytes();
+    return storageBusy_ ? 0 : FFat.totalBytes();
   }
 
   size_t freeBytes() const
   {
-    return FFat.totalBytes() - FFat.usedBytes();
+    return storageBusy_ ? 0 : FFat.totalBytes() - FFat.usedBytes();
   }
 
   size_t recordSize() const
@@ -634,6 +711,7 @@ private:
   static constexpr uint32_t STORAGE_MAGIC = 0x41524631;
   static constexpr uint16_t CURRENT_FORMAT_VERSION = 2;
   static constexpr uint32_t MAX_IMPORTED_MESSAGES = MAX_INDEXED_MESSAGES - 1;
+  static constexpr size_t FFAT_ERASE_CHUNK_SIZE = 64 * 1024;
 
   struct __attribute__((packed)) StorageHeader
   {
@@ -738,6 +816,32 @@ private:
         static_cast<uint32_t>(sizeof(DiskRecord)),
         0};
     return file.write(reinterpret_cast<const uint8_t*>(&header), sizeof(header)) == sizeof(header);
+  }
+
+  static bool wipeFfatPartition()
+  {
+    const esp_partition_t* partition = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, FFAT_PARTITION_LABEL);
+    if (partition == nullptr)
+    {
+      return false;
+    }
+
+    for (size_t offset = 0; offset < partition->size;)
+    {
+      const size_t remaining = partition->size - offset;
+      const size_t chunkSize = remaining < FFAT_ERASE_CHUNK_SIZE
+          ? remaining
+          : FFAT_ERASE_CHUNK_SIZE;
+      if (esp_partition_erase_range(partition, offset, chunkSize) != ESP_OK)
+      {
+        return false;
+      }
+      offset += chunkSize;
+      esp_task_wdt_reset();
+      vTaskDelay(1);
+    }
+    return true;
   }
 
   bool openReaderUnlocked(File& file) const
@@ -1329,6 +1433,7 @@ private:
   File appendFile_;
   IndexEntry* index_ = nullptr;
   size_t indexCapacity_ = 0;
+  volatile bool storageBusy_ = false;
   uint32_t nextId_ = 1;
   uint32_t messageCount_ = 0;
   bool importInProgress_ = false;
