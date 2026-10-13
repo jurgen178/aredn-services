@@ -10,6 +10,9 @@
 #include <cstdlib>
 #include <sys/time.h>
 #include <esp_system.h>
+#include <esp_task_wdt.h>
+#include <esp_timer.h>
+#include <new>
 #include "BoardPage.h"
 #include "CameraPage.h"
 #include "CameraSetupPage.h"
@@ -22,12 +25,12 @@
 
 namespace
 {
-// Time bounds reject uninitialized, implausible, or far-future clock values.
 constexpr char WIFI_AP_SSID[] = "AREDN-Server-Setup";
 constexpr char WIFI_AP_PASSWORD[] = "arednsetup";
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 20000;
 constexpr uint32_t WIFI_RECONNECT_INTERVAL_MS = 10000;
 constexpr uint32_t WIFI_RECOVERY_DELAY_MS = 5000;
+// Time bounds reject uninitialized, implausible, or far-future clock values.
 constexpr int64_t MIN_VALID_EPOCH = 1577836800LL;
 constexpr int64_t CLIENT_TIME_BOOTSTRAP_EPOCH = 1700000000LL;
 constexpr int64_t MAX_VALID_EPOCH = 4102444800LL;
@@ -37,8 +40,14 @@ constexpr uint8_t TIME_SOURCE_MANUAL = 2;
 constexpr uint8_t TIME_SOURCE_CLIENT = 3;
 constexpr uint8_t CLIENT_TIME_AGREEMENT_COUNT = 3;
 constexpr int64_t CLIENT_TIME_MAX_SAMPLE_SPREAD = 10;
+constexpr uint32_t CLIENT_TIME_SAMPLE_MAX_AGE_MS = 3600UL * 1000UL;
 constexpr char ADMIN_PASSWORD[] = "aredn-admin";
-constexpr uint32_t SERIAL_STATUS_INTERVAL_MS = 15000;
+constexpr char ADMIN_COOKIE_PREFIX[] = "aredn_admin=";
+constexpr size_t ADMIN_TOKEN_LENGTH = 32;
+constexpr uint32_t ADMIN_SESSION_LIFETIME_MS = 3600UL * 1000UL;
+constexpr uint8_t ADMIN_LOGIN_MAX_FAILURES = 5;
+constexpr uint32_t ADMIN_LOGIN_LOCKOUT_MS = 60000;
+constexpr size_t BOARD_BOOT_ID_LENGTH = 16;
 constexpr uint8_t OLED_WIDTH = 128;
 constexpr uint8_t OLED_HEIGHT = 64;
 constexpr int8_t OLED_RESET = -1;
@@ -54,9 +63,12 @@ FfatMessageBoard messageBoard;
 ReolinkCamera reolinkCamera;
 // Atomic fields are read or updated from both the server task and the main loop.
 std::atomic<uint8_t> deviceTimeSource{TIME_SOURCE_UNSET};
-std::atomic<uint32_t> adminSessionToken{0};
-std::atomic<uint32_t> boardRevision{1};
-std::atomic<uint32_t> fullRefreshRevision{0};
+// Both revision counters change together, so readers take them under one spinlock.
+// fullRefreshRevision is the revision of the last edit, delete, import, or reset.
+portMUX_TYPE boardRevisionLock = portMUX_INITIALIZER_UNLOCKED;
+uint32_t boardRevision = 1;
+uint32_t fullRefreshRevision = 0;
+char deviceBootId[BOARD_BOOT_ID_LENGTH + 1]{};
 std::atomic<bool> importUploadActive{false};
 std::atomic<bool> wifiCredentialsSaved{false};
 std::atomic<bool> wifiConfigRequestPending{false};
@@ -64,6 +76,14 @@ std::atomic<uint8_t> wifiProvisionState{0};
 std::atomic<bool> wifiScanActive{false};
 // Client samples are protected because HTTP handlers may run concurrently.
 SemaphoreHandle_t clientTimeMutex = nullptr;
+// The admin session and login throttling state below are protected by adminMutex.
+SemaphoreHandle_t adminMutex = nullptr;
+char adminToken[ADMIN_TOKEN_LENGTH + 1]{};
+bool adminSessionActive = false;
+uint32_t adminSessionStart = 0;
+uint8_t adminLoginFailures = 0;
+bool adminLoginLocked = false;
+uint32_t adminLoginLockStart = 0;
 SemaphoreHandle_t wifiConfigMutex = nullptr;
 SemaphoreHandle_t wifiScanMutex = nullptr;
 char requestedWifiSsid[33]{};
@@ -74,6 +94,7 @@ String savedWifiSsid;
 String savedWifiPassword;
 int64_t clientTimeSamples[CLIENT_TIME_AGREEMENT_COUNT]{};
 uint32_t clientTimeSampleClients[CLIENT_TIME_AGREEMENT_COUNT]{};
+uint32_t clientTimeSampleTicks[CLIENT_TIME_AGREEMENT_COUNT]{};
 uint8_t clientTimeSampleCount = 0;
 uint32_t lastReconnectAttempt = 0;
 uint32_t wifiConnectAttemptStart = 0;
@@ -84,7 +105,6 @@ bool wifiCandidateSawDisconnect = false;
 bool wifiRecoveryPending = false;
 bool wifiPreferencesAvailable = false;
 bool wasConnected = false;
-uint32_t lastSerialStatus = 0;
 uint32_t lastDisplayUpdate = 0;
 uint32_t displayedBoardRevision = 0;
 uint8_t displayedPage = 0;
@@ -111,6 +131,7 @@ struct ImportUploadState
   // The upload callback records failure until the final request handler sends its response.
   bool failed = false;
   bool started = false;
+  bool finished = false;
 };
 
 void drawDisplayLine(uint8_t row, const char* label, const char* value)
@@ -159,98 +180,77 @@ void drawCenteredDisplayText(const char* value, int16_t y)
   display.print(value);
 }
 
-void printDisplayUtf8(const char* value)
+uint8_t utf8SequenceLength(const uint8_t* value)
+{
+  // Returns the length of the complete UTF-8 sequence at value, or 1 for an invalid or
+  // truncated one. Continuation bytes are checked one by one, so a NUL is never skipped.
+  uint8_t length = 0;
+  if (*value >= 0xC2 && *value <= 0xDF)
+  {
+    length = 2;
+  }
+  else if (*value >= 0xE0 && *value <= 0xEF)
+  {
+    length = 3;
+  }
+  else if (*value >= 0xF0 && *value <= 0xF4)
+  {
+    length = 4;
+  }
+
+  for (uint8_t index = 1; index < length; ++index)
+  {
+    if ((value[index] & 0xC0) != 0x80)
+    {
+      return 1;
+    }
+  }
+  return length == 0 ? 1 : length;
+}
+
+size_t countUtf8Characters(const char* value)
+{
+  const uint8_t* current = reinterpret_cast<const uint8_t*>(value);
+  size_t characterCount = 0;
+  while (*current != '\0')
+  {
+    current += utf8SequenceLength(current);
+    ++characterCount;
+  }
+  return characterCount;
+}
+
+void printDisplayUtf8Characters(const char* value, size_t maxCharacters)
 {
   // The OLED font cannot render multibyte UTF-8; replace each complete code point with one '?'.
   const uint8_t* current = reinterpret_cast<const uint8_t*>(value);
-  while (*current != '\0')
+  for (size_t printed = 0; printed < maxCharacters && *current != '\0'; ++printed)
   {
     if (*current < 0x80)
     {
       display.write(*current++);
       continue;
     }
-
-    uint8_t sequenceLength = 0;
-    if (*current >= 0xC2 && *current <= 0xDF)
-    {
-      sequenceLength = 2;
-    }
-    else if (*current >= 0xE0 && *current <= 0xEF)
-    {
-      sequenceLength = 3;
-    }
-    else if (*current >= 0xF0 && *current <= 0xF4)
-    {
-      sequenceLength = 4;
-    }
-
-    bool validSequence = sequenceLength != 0;
-    for (uint8_t index = 1; validSequence && index < sequenceLength; ++index)
-    {
-      validSequence = (current[index] & 0xC0) == 0x80;
-    }
     display.write('?');
-    current += validSequence ? sequenceLength : 1;
+    current += utf8SequenceLength(current);
   }
+}
+
+void printDisplayUtf8(const char* value)
+{
+  printDisplayUtf8Characters(value, SIZE_MAX);
 }
 
 void printDisplayUtf8Ellipsis(const char* value, uint8_t maxCharacters)
 {
   // Count UTF-8 code points rather than bytes so truncation never splits a character.
-  const uint8_t* current = reinterpret_cast<const uint8_t*>(value);
-  uint8_t characterCount = 0;
-  while (*current != '\0')
-  {
-    uint8_t sequenceLength = 1;
-    if (*current >= 0xC2 && *current <= 0xDF)
-    {
-      sequenceLength = 2;
-    }
-    else if (*current >= 0xE0 && *current <= 0xEF)
-    {
-      sequenceLength = 3;
-    }
-    else if (*current >= 0xF0 && *current <= 0xF4)
-    {
-      sequenceLength = 4;
-    }
-    current += sequenceLength;
-    ++characterCount;
-  }
-
-  if (characterCount <= maxCharacters)
+  if (countUtf8Characters(value) <= maxCharacters)
   {
     printDisplayUtf8(value);
     return;
   }
 
-  const uint8_t visibleCharacters = maxCharacters > 3 ? maxCharacters - 3 : 0;
-  current = reinterpret_cast<const uint8_t*>(value);
-  for (uint8_t index = 0; index < visibleCharacters && *current != '\0'; ++index)
-  {
-    if (*current < 0x80)
-    {
-      display.write(*current++);
-      continue;
-    }
-
-    uint8_t sequenceLength = 1;
-    if (*current >= 0xC2 && *current <= 0xDF)
-    {
-      sequenceLength = 2;
-    }
-    else if (*current >= 0xE0 && *current <= 0xEF)
-    {
-      sequenceLength = 3;
-    }
-    else if (*current >= 0xF0 && *current <= 0xF4)
-    {
-      sequenceLength = 4;
-    }
-    display.write('?');
-    current += sequenceLength;
-  }
+  printDisplayUtf8Characters(value, maxCharacters > 3 ? maxCharacters - 3 : 0);
   display.print("...");
 }
 
@@ -311,14 +311,14 @@ void drawBoardDisplay()
       ? 0
       : static_cast<uint32_t>(static_cast<uint64_t>(messageBoard.usedBytes()) * 100 / storageTotal);
     snprintf(metrics, sizeof(metrics), "%lu%%",
-         static_cast<unsigned long>(storagePercent));
+             static_cast<unsigned long>(storagePercent));
     drawDisplayLine(6, "Storage: ", metrics);
-    const uint32_t uptimeSeconds = millis() / 1000;
-        snprintf(metrics, sizeof(metrics), "%lud %02luh %02lum",
-         static_cast<unsigned long>(uptimeSeconds / 86400),
-         static_cast<unsigned long>((uptimeSeconds / 3600) % 24),
-          static_cast<unsigned long>((uptimeSeconds / 60) % 60));
-        drawDisplayLine(7, "Uptime: ", metrics);
+    const uint32_t uptimeSeconds = static_cast<uint32_t>(esp_timer_get_time() / 1000000LL);
+    snprintf(metrics, sizeof(metrics), "%lud %02luh %02lum",
+             static_cast<unsigned long>(uptimeSeconds / 86400),
+             static_cast<unsigned long>((uptimeSeconds / 3600) % 24),
+             static_cast<unsigned long>((uptimeSeconds / 60) % 60));
+    drawDisplayLine(7, "Uptime: ", metrics);
   }
   else if (displayedPage == 1)
   {
@@ -471,6 +471,43 @@ bool containsSearchTerm(const char* value, const String& searchTerm)
   return false;
 }
 
+void markBoardChanged(bool requiresFullRefresh)
+{
+  // Edits and deletions cannot be fetched incrementally, so they flag every older revision.
+  portENTER_CRITICAL(&boardRevisionLock);
+  ++boardRevision;
+  if (requiresFullRefresh)
+  {
+    fullRefreshRevision = boardRevision;
+  }
+  portEXIT_CRITICAL(&boardRevisionLock);
+}
+
+void initializeDeviceBootId()
+{
+  const uint32_t high = esp_random();
+  const uint32_t low = esp_random();
+  snprintf(deviceBootId, sizeof(deviceBootId), "%08lx%08lx",
+           static_cast<unsigned long>(high),
+           static_cast<unsigned long>(low));
+}
+
+void readBoardRevisions(uint32_t& revision, uint32_t& fullRefresh)
+{
+  portENTER_CRITICAL(&boardRevisionLock);
+  revision = boardRevision;
+  fullRefresh = fullRefreshRevision;
+  portEXIT_CRITICAL(&boardRevisionLock);
+}
+
+uint32_t currentBoardRevision()
+{
+  uint32_t revision;
+  uint32_t fullRefresh;
+  readBoardRevisions(revision, fullRefresh);
+  return revision;
+}
+
 bool isDeviceTimeValid()
 {
   // The platform clock's boot-time default is earlier than this accepted epoch.
@@ -499,33 +536,60 @@ void resetClientTimeSamples()
   clientTimeSampleCount = 0;
 }
 
-bool addClientTimeSample(int64_t epoch, uint32_t clientAddress)
+void pruneExpiredClientTimeSamples(uint32_t nowMs)
 {
-  // Do not let one client satisfy the multi-client agreement threshold repeatedly.
+  uint8_t kept = 0;
+  for (uint8_t index = 0; index < clientTimeSampleCount; ++index)
+  {
+    if (nowMs - clientTimeSampleTicks[index] > CLIENT_TIME_SAMPLE_MAX_AGE_MS)
+    {
+      continue;
+    }
+    clientTimeSamples[kept] = clientTimeSamples[index];
+    clientTimeSampleClients[kept] = clientTimeSampleClients[index];
+    clientTimeSampleTicks[kept] = clientTimeSampleTicks[index];
+    ++kept;
+  }
+  clientTimeSampleCount = kept;
+}
+
+int64_t clientTimeSampleEpochNow(uint8_t index, uint32_t nowMs)
+{
+  // A sample is a browser timestamp from the past; advance it by the time that has elapsed since
+  // it arrived so samples collected minutes apart can be compared and applied as "now".
+  const uint32_t elapsedMs = nowMs - clientTimeSampleTicks[index];
+  return clientTimeSamples[index] + static_cast<int64_t>((elapsedMs + 500) / 1000);
+}
+
+void addClientTimeSample(int64_t epoch, uint32_t clientAddress, uint32_t nowMs)
+{
+  pruneExpiredClientTimeSamples(nowMs);
+
+  // Keep one sample per client so a single client cannot satisfy the agreement threshold
+  // repeatedly; a repeat submission replaces that client's older sample with the fresh one.
   for (uint8_t index = 0; index < clientTimeSampleCount; ++index)
   {
     if (clientTimeSampleClients[index] == clientAddress)
     {
-      return false;
+      clientTimeSamples[index] = epoch;
+      clientTimeSampleTicks[index] = nowMs;
+      return;
     }
   }
 
-  if (clientTimeSampleCount < CLIENT_TIME_AGREEMENT_COUNT)
-  {
-    clientTimeSamples[clientTimeSampleCount] = epoch;
-    clientTimeSampleClients[clientTimeSampleCount++] = clientAddress;
-  }
-  else
+  if (clientTimeSampleCount == CLIENT_TIME_AGREEMENT_COUNT)
   {
     for (uint8_t index = 1; index < CLIENT_TIME_AGREEMENT_COUNT; ++index)
     {
       clientTimeSamples[index - 1] = clientTimeSamples[index];
       clientTimeSampleClients[index - 1] = clientTimeSampleClients[index];
+      clientTimeSampleTicks[index - 1] = clientTimeSampleTicks[index];
     }
-    clientTimeSamples[CLIENT_TIME_AGREEMENT_COUNT - 1] = epoch;
-    clientTimeSampleClients[CLIENT_TIME_AGREEMENT_COUNT - 1] = clientAddress;
+    --clientTimeSampleCount;
   }
-  return true;
+  clientTimeSamples[clientTimeSampleCount] = epoch;
+  clientTimeSampleClients[clientTimeSampleCount] = clientAddress;
+  clientTimeSampleTicks[clientTimeSampleCount++] = nowMs;
 }
 
 bool synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
@@ -575,34 +639,36 @@ bool synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
   if (manualTime || difference > CLIENT_TIME_MAX_SAMPLE_SPREAD)
   {
     // A large correction, or any correction after manual setup, needs distinct-client agreement.
-    if (!addClientTimeSample(clientEpoch, clientAddress))
-    {
-      xSemaphoreGive(clientTimeMutex);
-      return true;
-    }
+    const uint32_t nowMs = millis();
+    addClientTimeSample(clientEpoch, clientAddress, nowMs);
     if (clientTimeSampleCount == CLIENT_TIME_AGREEMENT_COUNT)
     {
-      int64_t lowest = clientTimeSamples[0];
-      int64_t highest = clientTimeSamples[0];
+      int64_t current[CLIENT_TIME_AGREEMENT_COUNT];
+      for (uint8_t index = 0; index < CLIENT_TIME_AGREEMENT_COUNT; ++index)
+      {
+        current[index] = clientTimeSampleEpochNow(index, nowMs);
+      }
+      int64_t lowest = current[0];
+      int64_t highest = current[0];
       for (uint8_t index = 1; index < CLIENT_TIME_AGREEMENT_COUNT; ++index)
       {
-        lowest = min(lowest, clientTimeSamples[index]);
-        highest = max(highest, clientTimeSamples[index]);
+        lowest = min(lowest, current[index]);
+        highest = max(highest, current[index]);
       }
       if (highest - lowest <= CLIENT_TIME_MAX_SAMPLE_SPREAD)
       {
         // The median limits the effect of a single outlying client timestamp.
-        int64_t median = clientTimeSamples[0];
+        int64_t median = current[0];
         for (uint8_t index = 0; index < CLIENT_TIME_AGREEMENT_COUNT; ++index)
         {
           uint8_t valuesBelow = 0;
           for (uint8_t candidate = 0; candidate < CLIENT_TIME_AGREEMENT_COUNT; ++candidate)
           {
-            valuesBelow += clientTimeSamples[candidate] < clientTimeSamples[index] ? 1 : 0;
+            valuesBelow += current[candidate] < current[index] ? 1 : 0;
           }
           if (valuesBelow == CLIENT_TIME_AGREEMENT_COUNT / 2)
           {
-            median = clientTimeSamples[index];
+            median = current[index];
             break;
           }
         }
@@ -723,17 +789,133 @@ void formatSerialClock(char* output, size_t outputSize)
   strftime(output, outputSize, "%H:%M:%S UTC", &utcTime);
 }
 
+bool constantTimeEquals(const char* candidate, const char* expected)
+{
+  // Compare every expected byte so the response time does not reveal the matching prefix length.
+  const size_t candidateLength = strlen(candidate);
+  const size_t expectedLength = strlen(expected);
+  uint8_t difference = candidateLength != expectedLength ? 1 : 0;
+  for (size_t index = 0; index < expectedLength; ++index)
+  {
+    const char candidateChar = index < candidateLength ? candidate[index] : '\0';
+    difference |= static_cast<uint8_t>(candidateChar ^ expected[index]);
+  }
+  return difference == 0;
+}
+
+bool isAdminLoginLocked()
+{
+  if (adminMutex == nullptr || xSemaphoreTake(adminMutex, portMAX_DELAY) != pdTRUE)
+  {
+    return true;
+  }
+  if (adminLoginLocked && millis() - adminLoginLockStart >= ADMIN_LOGIN_LOCKOUT_MS)
+  {
+    adminLoginLocked = false;
+    adminLoginFailures = 0;
+  }
+  const bool locked = adminLoginLocked;
+  xSemaphoreGive(adminMutex);
+  return locked;
+}
+
+void recordFailedAdminLogin()
+{
+  if (adminMutex == nullptr || xSemaphoreTake(adminMutex, portMAX_DELAY) != pdTRUE)
+  {
+    return;
+  }
+  if (++adminLoginFailures >= ADMIN_LOGIN_MAX_FAILURES)
+  {
+    adminLoginLocked = true;
+    adminLoginLockStart = millis();
+  }
+  xSemaphoreGive(adminMutex);
+}
+
+bool startAdminSession(char* tokenOut)
+{
+  // 128 random bits, always formatted with a fixed width so cookie comparison is exact.
+  char token[ADMIN_TOKEN_LENGTH + 1];
+  for (size_t part = 0; part < ADMIN_TOKEN_LENGTH / 8; ++part)
+  {
+    snprintf(token + part * 8, 9, "%08lx", static_cast<unsigned long>(esp_random()));
+  }
+
+  if (adminMutex == nullptr || xSemaphoreTake(adminMutex, portMAX_DELAY) != pdTRUE)
+  {
+    return false;
+  }
+  // There is one active administrator session; a new login replaces its token.
+  memcpy(adminToken, token, sizeof(adminToken));
+  adminSessionActive = true;
+  adminSessionStart = millis();
+  adminLoginFailures = 0;
+  xSemaphoreGive(adminMutex);
+  memcpy(tokenOut, token, sizeof(token));
+  return true;
+}
+
+void endAdminSession()
+{
+  if (adminMutex != nullptr && xSemaphoreTake(adminMutex, portMAX_DELAY) == pdTRUE)
+  {
+    adminSessionActive = false;
+    memset(adminToken, 0, sizeof(adminToken));
+    xSemaphoreGive(adminMutex);
+  }
+}
+
+bool adminTokenMatches(const char* candidate)
+{
+  if (adminMutex == nullptr || xSemaphoreTake(adminMutex, portMAX_DELAY) != pdTRUE)
+  {
+    return false;
+  }
+  if (adminSessionActive && millis() - adminSessionStart >= ADMIN_SESSION_LIFETIME_MS)
+  {
+    adminSessionActive = false;
+    memset(adminToken, 0, sizeof(adminToken));
+  }
+  const bool matches = adminSessionActive && constantTimeEquals(candidate, adminToken);
+  xSemaphoreGive(adminMutex);
+  return matches;
+}
+
 bool isAdminAuthenticated(AsyncWebServerRequest* request)
 {
   // Only the current in-memory token is accepted; restarting the device invalidates sessions.
-  const uint32_t token = adminSessionToken.load(std::memory_order_acquire);
-  if (token == 0 || !request->hasHeader("Cookie"))
+  if (!request->hasHeader("Cookie"))
   {
     return false;
   }
 
-  const String expectedCookie = "aredn_admin=" + String(token, HEX);
-  return request->getHeader("Cookie")->value().indexOf(expectedCookie) >= 0;
+  // Match the cookie by exact name and value rather than as a substring of the header.
+  const String cookies = request->getHeader("Cookie")->value();
+  const int length = static_cast<int>(cookies.length());
+  int start = 0;
+  while (start < length)
+  {
+    int end = cookies.indexOf(';', start);
+    if (end < 0)
+    {
+      end = length;
+    }
+    while (start < end && cookies[start] == ' ')
+    {
+      ++start;
+    }
+    if (cookies.startsWith(ADMIN_COOKIE_PREFIX, start))
+    {
+      const String value = cookies.substring(start + strlen(ADMIN_COOKIE_PREFIX), end);
+      if (adminTokenMatches(value.c_str()))
+      {
+        return true;
+      }
+    }
+    start = end + 1;
+  }
+  return false;
 }
 
 bool isSetupApClient(AsyncWebServerRequest* request)
@@ -743,7 +925,14 @@ bool isSetupApClient(AsyncWebServerRequest* request)
     return false;
   }
 
+  // The connection must be addressed to the setup AP itself, so clients arriving through the
+  // station network are rejected even if their subnet overlaps with the AP subnet.
   const IPAddress apAddress = WiFi.softAPIP();
+  if (request->client()->localIP() != apAddress)
+  {
+    return false;
+  }
+
   const IPAddress clientAddress = request->client()->remoteIP();
   return clientAddress[0] == apAddress[0] &&
          clientAddress[1] == apAddress[1] &&
@@ -759,6 +948,29 @@ void sendAdminRequired(AsyncWebServerRequest* request)
 {
   // Keep authorization failures consistent for every protected route.
   request->send(401, "application/json", "{\"error\":\"admin_required\"}");
+}
+
+ImportUploadState* createImportUploadState()
+{
+  // The request owns _tempObject and releases it with free(), so allocate it with calloc().
+  void* memory = calloc(1, sizeof(ImportUploadState));
+  return memory == nullptr ? nullptr : new (memory) ImportUploadState();
+}
+
+void releaseImportUploadState(AsyncWebServerRequest* request)
+{
+  free(request->_tempObject);
+  request->_tempObject = nullptr;
+}
+
+void abortUnfinishedImport(const ImportUploadState* state)
+{
+  // Release the staged upload and the import slot if the request ends before its final chunk.
+  if (state != nullptr && state->started && !state->finished)
+  {
+    messageBoard.abortImport();
+    importUploadActive.store(false, std::memory_order_release);
+  }
 }
 
 void writeMessageItems(AsyncResponseStream& response,
@@ -793,6 +1005,12 @@ void writeMessageItems(AsyncResponseStream& response,
       : 0;
   for (uint32_t position = 0; position < storedCount; ++position)
   {
+    // Yield before filtering so a scan with few or no matches cannot starve the watchdog.
+    if ((position & 0x1f) == 0)
+    {
+      esp_task_wdt_reset();
+      delay(0);
+    }
     const uint32_t index = newestFirst ? storedCount - 1 - position : position;
     if (incrementalLatest && index < firstIndexAfter)
     {
@@ -809,11 +1027,6 @@ void writeMessageItems(AsyncResponseStream& response,
          !containsSearchTerm(message.text, *searchTerm)))
     {
       continue;
-    }
-    if ((position & 0x1f) == 0)
-    {
-      esp_task_wdt_reset();
-      delay(0);
     }
     if (limit != 0 && count >= limit)
     {
@@ -918,7 +1131,7 @@ void handleSubmitMessage(AsyncWebServerRequest* request)
     return;
   }
 
-  boardRevision.fetch_add(1, std::memory_order_acq_rel);
+  markBoardChanged(false);
 
   char responseBody[48];
   snprintf(responseBody, sizeof(responseBody), "{\"accepted\":true,\"id\":%lu}",
@@ -1185,7 +1398,6 @@ void registerRoutes()
     AsyncWebServerResponse* response = request->beginResponse_P(
         200, "text/html; charset=utf-8", SERVICE_PAGE);
     response->addHeader("Cache-Control", "no-cache, must-revalidate");
-    response->addHeader("Connection", "close");
     request->send(response);
   });
 
@@ -1231,6 +1443,12 @@ void registerRoutes()
 
   server.on("/msg-board/api/messages/export.json", HTTP_GET, [](AsyncWebServerRequest* request)
   {
+    // The response is buffered in RAM, so the full export is limited to administrators.
+    if (!isAdminAuthenticated(request))
+    {
+      sendAdminRequired(request);
+      return;
+    }
     File file;
     if (!messageBoard.openReaderExclusive(file))
     {
@@ -1252,33 +1470,45 @@ void registerRoutes()
 
   server.on("/msg-board/api/admin/login", HTTP_POST, [](AsyncWebServerRequest* request)
   {
-    if (!request->hasParam("password", true) ||
-        request->getParam("password", true)->value() != ADMIN_PASSWORD)
+    if (isAdminLoginLocked())
     {
+      request->send(429, "application/json", "{\"error\":\"too_many_attempts\"}");
+      return;
+    }
+    if (!request->hasParam("password", true) ||
+        !constantTimeEquals(request->getParam("password", true)->value().c_str(), ADMIN_PASSWORD))
+    {
+      recordFailedAdminLogin();
       request->send(403, "application/json", "{\"error\":\"invalid_password\"}");
       return;
     }
 
-    // There is one active administrator session; a new login replaces its token.
-    uint32_t token = esp_random();
-    if (token == 0)
+    char token[ADMIN_TOKEN_LENGTH + 1];
+    if (!startAdminSession(token))
     {
-      token = 1;
+      request->send(503, "application/json", "{\"error\":\"admin_unavailable\"}");
+      return;
     }
-    adminSessionToken.store(token, std::memory_order_release);
     AsyncWebServerResponse* response = request->beginResponse(
         200, "application/json", "{\"authenticated\":true}");
-    response->addHeader("Set-Cookie", "aredn_admin=" + String(token, HEX) +
+    response->addHeader("Set-Cookie", String(ADMIN_COOKIE_PREFIX) + token +
       "; Path=/; Max-Age=3600; HttpOnly; SameSite=Strict");
     request->send(response);
   });
 
   server.on("/msg-board/api/admin/logout", HTTP_POST, [](AsyncWebServerRequest* request)
   {
-    adminSessionToken.store(0, std::memory_order_release);
+    // Only the signed-in administrator may end the session; other clients cannot force a logout.
+    if (!isAdminAuthenticated(request))
+    {
+      sendAdminRequired(request);
+      return;
+    }
+    endAdminSession();
     AsyncWebServerResponse* response = request->beginResponse(
         200, "application/json", "{\"authenticated\":false}");
-    response->addHeader("Set-Cookie", "aredn_admin=; Max-Age=0; HttpOnly; SameSite=Strict");
+    response->addHeader("Set-Cookie", String(ADMIN_COOKIE_PREFIX) +
+      "; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
     request->send(response);
   });
 
@@ -1295,20 +1525,14 @@ void registerRoutes()
     ImportUploadState* state = static_cast<ImportUploadState*>(request->_tempObject);
     if (!isAdminAuthenticated(request))
     {
-      if (state != nullptr && state->started)
-      {
-        messageBoard.abortImport();
-        importUploadActive.store(false, std::memory_order_release);
-      }
-      request->_tempObject = nullptr;
-      delete state;
+      abortUnfinishedImport(state);
+      releaseImportUploadState(request);
       sendAdminRequired(request);
       return;
     }
     const bool failed = state == nullptr || state->failed;
     const char* importError = messageBoard.importError();
-    request->_tempObject = nullptr;
-    delete state;
+    releaseImportUploadState(request);
     if (failed)
     {
       String response = "{\"error\":\"import_failed\",\"reason\":\"";
@@ -1326,8 +1550,13 @@ void registerRoutes()
     // AsyncWebServer delivers uploads in chunks; keep state on the request until the final chunk.
     if (index == 0)
     {
-      request->_tempObject = new ImportUploadState();
-      ImportUploadState* state = static_cast<ImportUploadState*>(request->_tempObject);
+      ImportUploadState* state = createImportUploadState();
+      request->_tempObject = state;
+      // A dropped connection never reaches the final chunk, so release the import slot here.
+      request->onDisconnect([request]()
+      {
+        abortUnfinishedImport(static_cast<ImportUploadState*>(request->_tempObject));
+      });
       const bool claimed = !importUploadActive.exchange(true, std::memory_order_acq_rel);
       if (state == nullptr || !claimed || !isAdminAuthenticated(request) ||
           !messageBoard.beginImport(total))
@@ -1365,10 +1594,10 @@ void registerRoutes()
       if (state != nullptr && state->started)
       {
         importUploadActive.store(false, std::memory_order_release);
+        state->finished = true;
         if (!state->failed)
         {
-          const uint32_t revision = boardRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
-          fullRefreshRevision.store(revision, std::memory_order_release);
+          markBoardChanged(true);
         }
       }
     }
@@ -1384,8 +1613,7 @@ void registerRoutes()
     const bool reset = messageBoard.reset();
     if (reset)
     {
-      const uint32_t revision = boardRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
-      fullRefreshRevision.store(revision, std::memory_order_release);
+      markBoardChanged(true);
     }
     request->send(reset ? 200 : 500,
                   "application/json",
@@ -1408,8 +1636,7 @@ void registerRoutes()
     const bool deleted = messageBoard.remove(id);
     if (deleted)
     {
-      const uint32_t revision = boardRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
-      fullRefreshRevision.store(revision, std::memory_order_release);
+      markBoardChanged(true);
     }
     request->send(deleted ? 200 : 404,
                   "application/json",
@@ -1436,8 +1663,13 @@ void registerRoutes()
     String name = request->getParam("name", true)->value();
     String text = request->getParam("text", true)->value();
     FfatMessageBoard::Priority priority = FfatMessageBoard::Priority::Green;
-    if (request->hasParam("priority", true) &&
-        !parseMessagePriority(request->getParam("priority", true)->value(), priority))
+    if (!request->hasParam("priority", true))
+    {
+      // A missing priority must not silently reset the stored one to green.
+      request->send(400, "application/json", "{\"error\":\"missing_priority\"}");
+      return;
+    }
+    if (!parseMessagePriority(request->getParam("priority", true)->value(), priority))
     {
       request->send(400, "application/json", "{\"error\":\"invalid_priority\"}");
       return;
@@ -1455,8 +1687,7 @@ void registerRoutes()
     const bool updated = messageBoard.update(id, name.c_str(), text.c_str(), priority);
     if (updated)
     {
-      const uint32_t revision = boardRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
-      fullRefreshRevision.store(revision, std::memory_order_release);
+      markBoardChanged(true);
     }
     request->send(updated ? 200 : 404,
                   "application/json",
@@ -1467,22 +1698,10 @@ void registerRoutes()
 
   server.on("/msg-board/api/messages", HTTP_GET, [](AsyncWebServerRequest* request)
   {
-    File file;
-    if (!messageBoard.openReaderExclusive(file))
-    {
-      request->send(500, "application/json", "{\"error\":\"board_unavailable\"}");
-      return;
-    }
-
-    const bool clockValid = isDeviceTimeValid();
-    const time_t currentEpoch = clockValid ? time(nullptr) : 0;
-    // Keep interactive pages bounded by default; callers must opt in to a larger page.
+    // Validate every parameter first so no error path has to release the board lock.
+    // Pages are always bounded: the full archive is only available through the admin export.
     uint32_t limit = 20;
-    if (request->hasParam("all"))
-    {
-      limit = 0;
-    }
-    else if (request->hasParam("limit"))
+    if (request->hasParam("limit"))
     {
       const long requestedLimit = request->getParam("limit")->value().toInt();
       limit = requestedLimit > 0 ? static_cast<uint32_t>(requestedLimit) : 20;
@@ -1504,7 +1723,6 @@ void registerRoutes()
       searchTerm.trim();
       if (searchTerm.length() > 64)
       {
-        messageBoard.closeReaderExclusive(file);
         request->send(400, "application/json", "{\"error\":\"search_too_long\"}");
         return;
       }
@@ -1513,27 +1731,51 @@ void registerRoutes()
     if (request->hasParam("priority"))
     {
       const String priorityValue = request->getParam("priority")->value();
-      if (priorityValue != "all" &&
-          (priorityValue == "green" || priorityValue == "orange" || priorityValue == "red"))
+      FfatMessageBoard::Priority parsedPriority;
+      if (priorityValue != "all")
       {
-        FfatMessageBoard::Priority parsedPriority;
-        parseMessagePriority(priorityValue, parsedPriority);
+        if (!parseMessagePriority(priorityValue, parsedPriority))
+        {
+          request->send(400, "application/json", "{\"error\":\"invalid_priority\"}");
+          return;
+        }
         priorityFilter = static_cast<int>(parsedPriority);
       }
-      else if (priorityValue != "all")
-      {
-        messageBoard.closeReaderExclusive(file);
-        request->send(400, "application/json", "{\"error\":\"invalid_priority\"}");
-        return;
-      }
     }
+
+    const uint32_t clientRevision = request->hasParam("rev")
+        ? request->getParam("rev")->value().toInt()
+        : 0;
+    const bool hasClientRevision = request->hasParam("rev") && clientRevision != 0;
+    const String clientBootId = request->hasParam("boot")
+        ? request->getParam("boot")->value()
+        : String();
+
+    File file;
+    if (!messageBoard.openReaderExclusive(file))
+    {
+      request->send(500, "application/json", "{\"error\":\"board_unavailable\"}");
+      return;
+    }
+
+    const bool clockValid = isDeviceTimeValid();
+    const time_t currentEpoch = clockValid ? time(nullptr) : 0;
     bool hasMore = false;
     AsyncResponseStream* response = request->beginResponseStream("application/json");
-    const uint32_t currentRevision = boardRevision.load(std::memory_order_acquire);
-    // Clients use these compact fields to decide whether polling can stay incremental.
-    const bool requiresFullRefresh = fullRefreshRevision.load(std::memory_order_acquire) == currentRevision;
-    response->printf("{\"r\":%lu,\"f\":%s,\"v\":%s,\"s\":\"%s\",\"e\":%lld,\"p\":[",
+    uint32_t currentRevision;
+    uint32_t fullRefreshAt;
+    readBoardRevisions(currentRevision, fullRefreshAt);
+    // Clients use these compact fields to decide whether polling can stay incremental. A client
+    // reporting its last seen revision needs a full refresh when an edit or delete happened
+    // after it, or when the revision went backwards because the device restarted.
+    const bool requiresFullRefresh = hasClientRevision
+        ? clientBootId != deviceBootId ||
+          clientRevision < fullRefreshAt ||
+          clientRevision > currentRevision
+        : fullRefreshAt == currentRevision;
+    response->printf("{\"r\":%lu,\"b\":\"%s\",\"f\":%s,\"v\":%s,\"s\":\"%s\",\"e\":%lld,\"p\":[",
              static_cast<unsigned long>(currentRevision),
+             deviceBootId,
              requiresFullRefresh ? "true" : "false",
                      clockValid ? "true" : "false",
                      deviceTimeSourceName(),
@@ -1723,41 +1965,46 @@ void registerRoutes()
 }
 }
 
+const char* resetReasonName(esp_reset_reason_t reason)
+{
+  switch (reason)
+  {
+    case ESP_RST_POWERON:   return "Power-On";
+    case ESP_RST_EXT:       return "EXT_PIN (Reset by external pin)";
+    case ESP_RST_SW:        return "Software Reset";
+    case ESP_RST_PANIC:     return "ERROR: PANIC";
+    case ESP_RST_INT_WDT:   return "ERROR: Interrupt WDT";
+    case ESP_RST_TASK_WDT:  return "ERROR: Task WDT";
+    case ESP_RST_WDT:       return "ERROR: Other WDT";
+    case ESP_RST_DEEPSLEEP: return "Deep Sleep";
+    case ESP_RST_BROWNOUT:  return "ERROR: Brownout";
+    case ESP_RST_SDIO:      return "SDIO (Reset over SDIO)";
+    default:                return "UNKNOWN (Reset reason can not be determined)";
+  }
+}
+
 void setup()
 {
   // Bring up diagnostics and the optional display before initializing storage and networking.
   Serial.begin(115200);
 
-  unsigned long startZeit = millis();
-  while (!Serial && (millis() - startZeit < 1500))
+  const unsigned long serialWaitStart = millis();
+  while (!Serial && (millis() - serialWaitStart < 1500))
   {
     delay(10);
   }
-  unsigned long dauer = millis() - startZeit;
-  
-  delay(200); 
+  const unsigned long serialWaitMs = millis() - serialWaitStart;
+
+  delay(200);
   Serial.print("[Serial connection ready. Connection time: ");
-  Serial.print(dauer);
+  Serial.print(serialWaitMs);
   Serial.println(" ms.]");
 
   Serial.println("\nAREDN service starting");
 
-  Serial.printf("ESP reset reason: ");
-  esp_reset_reason_t r = esp_reset_reason();
-  switch(r) {
-    case ESP_RST_UNKNOWN:   Serial.printf("UNKNOWN (Reset reason can not be determined)"); break;
-    case ESP_RST_POWERON:   Serial.printf("Power-On"); break;
-    case ESP_RST_EXT:       Serial.printf("EXT_PIN (Reset by external pin)"); break;
-    case ESP_RST_SW:        Serial.printf("Software Reset"); break;
-    case ESP_RST_PANIC:     Serial.printf("❌ PANIC"); break;
-    case ESP_RST_INT_WDT:   Serial.printf("❌ Interrupt WDT"); break;
-    case ESP_RST_TASK_WDT:  Serial.printf("❌ Task WDT"); break;
-    case ESP_RST_WDT:       Serial.printf("❌ Other WDT"); break;
-    case ESP_RST_DEEPSLEEP: Serial.printf("Deep Sleep"); break;
-    case ESP_RST_BROWNOUT:  Serial.printf("❌ Brownout"); break;
-    case ESP_RST_SDIO:      Serial.printf("SDIO (Reset over SDIO)"); break;
-  }
-  Serial.printf(" (Code %d)\n", static_cast<int>(r));
+  const esp_reset_reason_t resetReason = esp_reset_reason();
+  Serial.printf("ESP reset reason: %s (Code %d)\n",
+                resetReasonName(resetReason), static_cast<int>(resetReason));
   Serial.flush();
   initializeDisplay();
   Serial.printf("Hardware: %s | cores: %d | PSRAM: %lu KB | flash: %lu MB | free heap: %lu KB\n",
@@ -1772,7 +2019,11 @@ void setup()
     Serial.println("ERROR: Could not initialize the FFat message board");
   }
   clientTimeMutex = xSemaphoreCreateMutex();
-
+  adminMutex = xSemaphoreCreateMutex();
+  if (adminMutex == nullptr)
+  {
+    Serial.println("ERROR: Could not create the admin session mutex; administrator login is disabled");
+  }
   WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(false);
@@ -1841,6 +2092,7 @@ void setup()
   Serial.println("Client time synchronization enabled");
   Serial.printf("Wi-Fi connection started (status %d)\n", static_cast<int>(WiFi.status()));
 
+  initializeDeviceBootId();
   reolinkCamera.begin();
   registerRoutes();
   DefaultHeaders::Instance().addHeader("Connection", "close");
@@ -1866,8 +2118,15 @@ void loop()
 
       memcpy(activeWifiSsid, candidateSsid, sizeof(activeWifiSsid));
       memcpy(activeWifiPassword, candidatePassword, sizeof(activeWifiPassword));
-      wifiCandidateSawDisconnect = !connected;
       WiFi.disconnect(false, false);
+      // The status can lag behind the disconnect; without a confirmed drop, reconnecting to the
+      // same network would be indistinguishable from the old connection still being up.
+      const uint32_t disconnectWaitStart = millis();
+      while (WiFi.status() == WL_CONNECTED && millis() - disconnectWaitStart < 1000)
+      {
+        delay(20);
+      }
+      wifiCandidateSawDisconnect = WiFi.status() != WL_CONNECTED;
       WiFi.begin(activeWifiSsid, activeWifiPassword);
       wifiConnectAttemptStart = now;
       wifiConnectAttemptActive = true;
@@ -1961,7 +2220,7 @@ void loop()
   if (displayAvailable)
   {
     // Refresh the cached latest post only when a write changes the board revision.
-    const uint32_t currentRevision = boardRevision.load(std::memory_order_acquire);
+    const uint32_t currentRevision = currentBoardRevision();
     const bool boardChanged = currentRevision != displayedBoardRevision;
     if (boardChanged)
     {
@@ -1980,19 +2239,6 @@ void loop()
     }
   }
 
-/*   if (now - lastSerialStatus >= SERIAL_STATUS_INTERVAL_MS)
-  {
-    lastSerialStatus = now;
-    char clockTime[14]{};
-    formatSerialClock(clockTime, sizeof(clockTime));
-    Serial.printf("Status: time %s | heap %lu KB | Wi-Fi %s | RSSI %d dBm | messages %lu\n",
-                  clockTime,
-                  static_cast<unsigned long>(ESP.getFreeHeap() / 1024),
-                  connected ? "connected" : "disconnected",
-                  connected ? WiFi.RSSI() : 0,
-            static_cast<unsigned long>(messageBoard.messageCount()));
-  }
- */
   if (connected && !wasConnected)
   {
     const String ipAddress = WiFi.localIP().toString();

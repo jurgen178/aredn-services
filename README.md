@@ -132,35 +132,35 @@ Supported import fields are `id`, `created_at` in UTC ISO-8601 format (`YYYY-MM-
 
 ### Message Board API
 
-* `GET /msg-board/api/messages` returns newest messages first. Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, and `priority=green|orange|red|all`.
+* `GET /msg-board/api/messages` returns newest messages first, at most 100 per request (default 20). Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, `rev=<revision>`, and `boot=<boot-id>`. Clients pass the revision (`r`) and boot ID (`b`) from their previous response as `rev` and `boot`; the response flag `f` is then `true` when a message was edited, deleted, imported, or reset after that revision, or when the device has restarted, and the client must reload the list instead of polling incrementally.
 * `POST /msg-board/api/messages` submits a message.
-* `GET /msg-board/api/messages/export.json` downloads the complete board as JSON.
+* `GET /msg-board/api/messages/export.json` downloads the complete board as JSON; it requires an admin session.
 * `GET /msg-board/api/time` returns the current device clock state.
 * `POST /msg-board/api/time` sets the device time manually using form field `epoch`; it requires an admin session.
 
 Example response from `GET /msg-board/api/messages`:
 
 ```json
-{"r":2,"f":true,"v":true,"s":"client","e":1790968087,"p":[{"i":10,"t":1790939700,"u":"W6AM","m":"Acknowledged."}]}
+{"r":2,"b":"a1b2c3d4e5f60718","f":true,"v":true,"s":"client","e":1790968087,"p":[{"i":10,"t":1790939700,"u":"W6AM","m":"Acknowledged."}]}
 ```
 
 ### Administration API
 
-These endpoints require the admin session cookie created by login:
+These endpoints require the admin session cookie created by login. The session token is random, expires after one hour, and login is blocked for one minute after five failed attempts:
 
 * `POST /msg-board/api/admin/login` with form field `password`
-* `POST /msg-board/api/admin/logout`
+* `POST /msg-board/api/admin/logout` (admin session required)
 * `GET /msg-board/api/admin/status`
 * `POST /msg-board/api/admin/import` with an `application/json` file body
 * `DELETE /msg-board/api/admin/messages`
 * `DELETE /msg-board/api/admin/message?id=<id>`
-* `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority`
+* `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority` (all required)
 
 ### Device and Setup APIs
 
 `GET /api/status` returns Wi-Fi, heap, FFat, and board information.
 
-`POST /api/time/sync` accepts a form field `epoch` and submits a browser time sample to the device clock. The root, camera, and message-board pages call it when opened; the message board also calls it during its periodic refresh. Large corrections and corrections after manual time setting require agreement from three distinct clients whose samples are within 10 seconds of each other.
+`POST /api/time/sync` accepts a form field `epoch` and submits a browser time sample to the device clock. The root, camera, and message-board pages call it when opened; the message board also calls it during its periodic refresh. Large corrections and corrections after manual time setting require agreement from three distinct clients whose samples are within 10 seconds of each other. Each sample is advanced by the time elapsed since it arrived, a client's newer sample replaces its older one, and samples older than one hour are discarded.
 
 The following setup pages and APIs are only available to clients connected to the `AREDN-Server-Setup` access point:
 

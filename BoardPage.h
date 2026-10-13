@@ -752,6 +752,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     let oldestMessageId = 0;
     let moreMessagesAvailable = false;
     let boardRevision = null;
+    let boardBootId = null;
     let refreshRequested = false;
     let requestedRefreshMode = 'after';
     let viewGeneration = 0;
@@ -1251,6 +1252,10 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         const isIncremental = mode === 'after' && latestMessageId !== 0;
         const priorityQuery = selectedPriority === 'all'
           ? '' : `&priority=${encodeURIComponent(selectedPriority)}`;
+        // Reporting both values lets the device detect missed edits and restarts.
+        const revisionQuery = boardRevision === null || boardBootId === null
+          ? ''
+          : `&rev=${boardRevision}&boot=${encodeURIComponent(boardBootId)}`;
         let endpoint = `${API_BASE}/messages?limit=50${priorityQuery}`;
         if (mode === 'search') {
           endpoint = `${API_BASE}/messages?search=${encodeURIComponent(searchTerm)}&limit=50${priorityQuery}`;
@@ -1262,20 +1267,23 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           endpoint = `${API_BASE}/messages?before=${oldestMessageId}&limit=50` +
             (searchActive ? `&search=${encodeURIComponent(searchTerm)}` : '') + priorityQuery;
         }
+        endpoint += revisionQuery;
         const response = await fetch(endpoint, { cache: 'no-store' });
         if (!response.ok) throw new Error('Board unavailable');
         const data = await response.json();
         if (requestGeneration !== viewGeneration) {
           return;
         }
-        const revisionChanged = boardRevision !== null && data.r !== boardRevision;
-        if (revisionChanged && data.f && mode !== 'full') {
+        const revisionChanged = boardRevision !== null &&
+          (data.r !== boardRevision || data.b !== boardBootId);
+        if (revisionChanged && data.f && mode !== 'full' && mode !== 'search') {
           refreshInProgress = false;
           updateLoadMoreState();
           await refreshMessages(mode === 'search' ? 'search' : 'full');
           return;
         }
         boardRevision = data.r;
+        boardBootId = data.b;
         const appendPage = mode === 'before';
         mergeMessages(data.p, !appendPage &&
           (mode === 'full' || mode === 'search' || !isIncremental));
@@ -1449,7 +1457,9 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         body: new URLSearchParams({ password: adminPassword.value })
       });
       if (!response.ok) {
-        setAdminError('Invalid administrator password.');
+        setAdminError(response.status === 429
+          ? 'Too many failed attempts. Try again in a minute.'
+          : 'Invalid administrator password.');
         return;
       }
       adminPassword.value = '';
