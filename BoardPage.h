@@ -589,7 +589,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       <div class="header-indicators">
         <div class="device-clock" aria-label="Device clock">
           <time id="deviceClock">TIME NOT SET</time>
-          <span id="deviceClockDate" class="device-clock-date">Awaiting network time</span>
+          <span id="deviceClockDate" class="device-clock-date">Awaiting client time</span>
           <span id="deviceClockSource" class="device-clock-source">CLOCK STATUS UNKNOWN</span>
         </div>
         <div class="network-state" aria-live="polite">
@@ -607,7 +607,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         <h2 id="composeTitle">Write a message</h2>
       </div>
       <div id="clockSetup" class="clock-setup" hidden>
-        <p id="clockStatus" class="clock-status" role="status" aria-live="polite">Checking for network time ...</p>
+        <p id="clockStatus" class="clock-status" role="status" aria-live="polite">Checking device time...</p>
         <form id="clockForm">
           <div class="clock-controls">
             <label for="deviceDateTime">Set device date and time</label>
@@ -692,6 +692,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
 
   <script>
     const API_BASE = '/msg-board/api';
+    const TIME_SYNC_ENDPOINT = '/api/time/sync';
     const form = document.getElementById('messageForm');
     const authorInput = document.getElementById('author');
     const messageInput = document.getElementById('messageText');
@@ -738,6 +739,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     let retryCount = 0;
     let retryTimer = 0;
     let refreshInProgress = false;
+    let clientTimeSyncInProgress = false;
     let deviceClockSet = false;
     let messageSending = false;
     let adminAuthenticated = false;
@@ -944,11 +946,11 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         clockStatus.textContent = 'Device clock synchronized with network time.';
       } else if (deviceClockSet) {
         deviceClockSource.textContent = 'MANUALLY SET';
-        clockStatus.textContent = 'Device time was set manually. It will be checked for network time again; set it again after a restart if needed.';
+        clockStatus.textContent = 'Device time was set manually. Client time samples can correct it after three distinct mesh clients agree within 10 seconds.';
       } else {
         deviceClockSource.textContent = 'TIME NOT SET';
-        deviceClockDate.textContent = 'Awaiting network time';
-        clockStatus.textContent = 'Network time is unavailable. An administrator can set the device date and time below.';
+        deviceClockDate.textContent = 'Awaiting client time';
+        clockStatus.textContent = 'Waiting for a client time sample. An administrator can set the device date and time below.';
       }
     }
 
@@ -1211,9 +1213,26 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       }
     }
 
-    function addClientTime(endpoint) {
-      const separator = endpoint.includes('?') ? '&' : '?';
-      return `${endpoint}${separator}c_time=${Math.floor(Date.now() / 1000)}`;
+    async function synchronizeDeviceTime() {
+      if (clientTimeSyncInProgress) return;
+      clientTimeSyncInProgress = true;
+      try {
+        const response = await fetch(TIME_SYNC_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ epoch: String(Math.floor(Date.now() / 1000)) })
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+      } catch (error) {
+        console.error(`Device clock synchronization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`);
+      } finally {
+        clientTimeSyncInProgress = false;
+      }
     }
 
     async function refreshMessages(mode = 'after') {
@@ -1243,7 +1262,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           endpoint = `${API_BASE}/messages?before=${oldestMessageId}&limit=50` +
             (searchActive ? `&search=${encodeURIComponent(searchTerm)}` : '') + priorityQuery;
         }
-        const response = await fetch(addClientTime(endpoint), { cache: 'no-store' });
+        const response = await fetch(endpoint, { cache: 'no-store' });
         if (!response.ok) throw new Error('Board unavailable');
         const data = await response.json();
         if (requestGeneration !== viewGeneration) {
@@ -1303,6 +1322,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       pollTimer = window.setTimeout(async () => {
         pollTimer = 0;
         if (!document.hidden) {
+          await synchronizeDeviceTime();
           await requestRefresh();
         }
         scheduleNextPoll();
@@ -1326,8 +1346,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           body: new URLSearchParams({
             name: authorInput.value.trim(),
             text: messageInput.value.trim(),
-            priority: messagePriorityInput.value,
-            c_time: String(Math.floor(Date.now() / 1000))
+            priority: messagePriorityInput.value
           })
         });
 
@@ -1550,7 +1569,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
     });
 
     refreshAdminState();
-    refreshMessages().then(scheduleNextPoll);
+    synchronizeDeviceTime().then(() => refreshMessages()).then(scheduleNextPoll);
     setInterval(renderHeaderClock, 1000);
   </script>
 </body>

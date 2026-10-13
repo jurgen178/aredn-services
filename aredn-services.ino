@@ -527,14 +527,14 @@ bool addClientTimeSample(int64_t epoch, uint32_t clientAddress)
   return true;
 }
 
-void synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
+bool synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
 {
   // Client time is accepted immediately only for an unset clock or a small correction.
   if (clientTimeMutex == nullptr || clientEpoch < CLIENT_TIME_BOOTSTRAP_EPOCH ||
       clientEpoch > MAX_VALID_EPOCH ||
       xSemaphoreTake(clientTimeMutex, portMAX_DELAY) != pdTRUE)
   {
-    return;
+    return false;
   }
 
   const bool manualTime = deviceTimeSource.load(std::memory_order_acquire) == TIME_SOURCE_MANUAL;
@@ -544,13 +544,15 @@ void synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
       deviceTimeSource.load(std::memory_order_acquire) == TIME_SOURCE_UNSET)
   {
     // With no trustworthy clock yet, the first plausible browser timestamp bootstraps it.
-    if (settimeofday(&clientTime, nullptr) == 0)
+    if (settimeofday(&clientTime, nullptr) != 0)
     {
-      deviceTimeSource.store(TIME_SOURCE_CLIENT, std::memory_order_release);
-      resetClientTimeSamples();
+      xSemaphoreGive(clientTimeMutex);
+      return false;
     }
+    deviceTimeSource.store(TIME_SOURCE_CLIENT, std::memory_order_release);
+    resetClientTimeSamples();
     xSemaphoreGive(clientTimeMutex);
-    return;
+    return true;
   }
 
   const int64_t difference = clientEpoch > deviceEpoch
@@ -558,13 +560,15 @@ void synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
       : deviceEpoch - clientEpoch;
   if (!manualTime && difference >= 1 && difference <= CLIENT_TIME_MAX_SAMPLE_SPREAD)
   {
-    if (settimeofday(&clientTime, nullptr) == 0)
+    if (settimeofday(&clientTime, nullptr) != 0)
     {
-      deviceTimeSource.store(TIME_SOURCE_CLIENT, std::memory_order_release);
-      resetClientTimeSamples();
+      xSemaphoreGive(clientTimeMutex);
+      return false;
     }
+    deviceTimeSource.store(TIME_SOURCE_CLIENT, std::memory_order_release);
+    resetClientTimeSamples();
     xSemaphoreGive(clientTimeMutex);
-    return;
+    return true;
   }
 
   if (manualTime || difference > CLIENT_TIME_MAX_SAMPLE_SPREAD)
@@ -573,7 +577,7 @@ void synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
     if (!addClientTimeSample(clientEpoch, clientAddress))
     {
       xSemaphoreGive(clientTimeMutex);
-      return;
+      return true;
     }
     if (clientTimeSampleCount == CLIENT_TIME_AGREEMENT_COUNT)
     {
@@ -602,15 +606,19 @@ void synchronizeFromClient(int64_t clientEpoch, uint32_t clientAddress)
           }
         }
         const struct timeval consensusTime = {static_cast<time_t>(median), 0};
-        if (settimeofday(&consensusTime, nullptr) == 0)
+        if (settimeofday(&consensusTime, nullptr) != 0)
         {
-          deviceTimeSource.store(TIME_SOURCE_CLIENT, std::memory_order_release);
+          resetClientTimeSamples();
+          xSemaphoreGive(clientTimeMutex);
+          return false;
         }
+        deviceTimeSource.store(TIME_SOURCE_CLIENT, std::memory_order_release);
         resetClientTimeSamples();
       }
     }
   }
   xSemaphoreGive(clientTimeMutex);
+  return true;
 }
 
 void appendJsonString(Print& output, const char* value)
@@ -852,21 +860,6 @@ void writeMessageItems(AsyncResponseStream& response,
 
 void handleSubmitMessage(AsyncWebServerRequest* request)
 {
-  if (request->hasParam("c_time", true))
-  {
-    // Message submissions also carry client time so a browser can initialize the board clock.
-    const String clientTimeValue = request->getParam("c_time", true)->value();
-    char* parseEnd = nullptr;
-    const long long clientEpoch = strtoll(clientTimeValue.c_str(), &parseEnd, 10);
-    if (parseEnd != clientTimeValue.c_str() && *parseEnd == '\0')
-    {
-      const uint32_t clientAddress = request->client() == nullptr
-          ? 0
-          : static_cast<uint32_t>(request->client()->remoteIP());
-      synchronizeFromClient(static_cast<int64_t>(clientEpoch), clientAddress);
-    }
-  }
-
   if (!request->hasParam("name", true) || !request->hasParam("text", true))
   {
     request->send(400, "application/json", "{\"error\":\"missing_fields\"}");
@@ -1473,20 +1466,6 @@ void registerRoutes()
 
   server.on("/msg-board/api/messages", HTTP_GET, [](AsyncWebServerRequest* request)
   {
-    if (request->hasParam("c_time"))
-    {
-      const String clientTimeValue = request->getParam("c_time")->value();
-      char* parseEnd = nullptr;
-      const long long clientEpoch = strtoll(clientTimeValue.c_str(), &parseEnd, 10);
-      if (parseEnd != clientTimeValue.c_str() && *parseEnd == '\0')
-      {
-        const uint32_t clientAddress = request->client() == nullptr
-            ? 0
-            : static_cast<uint32_t>(request->client()->remoteIP());
-        synchronizeFromClient(static_cast<int64_t>(clientEpoch), clientAddress);
-      }
-    }
-
     File file;
     if (!messageBoard.openReaderExclusive(file))
     {
@@ -1660,6 +1639,41 @@ void registerRoutes()
         ipAddress.c_str(),
         rssi);
     request->send(200, "application/json", response);
+  });
+
+  server.on("/api/time/sync", HTTP_POST, [](AsyncWebServerRequest* request)
+  {
+    if (!request->hasParam("epoch", true))
+    {
+      request->send(400, "application/json", "{\"error\":\"missing_epoch\"}");
+      return;
+    }
+
+    const String epochValue = request->getParam("epoch", true)->value();
+    char* parseEnd = nullptr;
+    const long long clientEpoch = strtoll(epochValue.c_str(), &parseEnd, 10);
+    if (parseEnd == epochValue.c_str() || *parseEnd != '\0' ||
+        clientEpoch < CLIENT_TIME_BOOTSTRAP_EPOCH || clientEpoch > MAX_VALID_EPOCH)
+    {
+      request->send(400, "application/json", "{\"error\":\"invalid_epoch\"}");
+      return;
+    }
+
+    if (clientTimeMutex == nullptr)
+    {
+      request->send(503, "application/json", "{\"error\":\"clock_sync_unavailable\"}");
+      return;
+    }
+
+    const uint32_t clientAddress = request->client() == nullptr
+        ? 0
+        : static_cast<uint32_t>(request->client()->remoteIP());
+    if (!synchronizeFromClient(static_cast<int64_t>(clientEpoch), clientAddress))
+    {
+      request->send(500, "application/json", "{\"error\":\"clock_sync_failed\"}");
+      return;
+    }
+    request->send(204);
   });
 
   server.on("/msg-board", HTTP_GET, [](AsyncWebServerRequest* request)

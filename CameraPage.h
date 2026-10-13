@@ -281,6 +281,19 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       typeof cameraFrame.requestFullscreen === 'function' &&
       typeof document.exitFullscreen === 'function';
 
+    async function synchronizeDeviceTime() {
+      try {
+        const response = await fetch('/api/time/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ epoch: String(Math.floor(Date.now() / 1000)) })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      } catch (error) {
+        console.error('Device clock synchronization failed:', error);
+      }
+    }
+
     function updateFullscreenButton() {
       const isFullscreen = document.fullscreenElement === cameraFrame;
       fullscreenButton.hidden = isFullscreen;
@@ -396,6 +409,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       fullscreenStatus.hidden = false;
     }
     updateFullscreenButton();
+    synchronizeDeviceTime();
     refreshCameraStatus();
     window.setInterval(refreshCameraStatus, 15000);
   </script>

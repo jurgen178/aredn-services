@@ -1,8 +1,9 @@
 # AREDN Server for ESP32
 
-A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides a message board and a Reolink RLC-510A snapshot page without requiring external internet or central server infrastructure.
+A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides a message board and a camera snapshot page without requiring external internet or central server infrastructure.
 
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/DSC_3293.JPG" alt="AREDN">
+
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/msg-board-www.jpg" alt="Message board" width="500">
 
 ## Features
@@ -11,7 +12,7 @@ A lightweight local web server for the **AREDN (Amateur Radio Emergency Data Net
 * HTTP responses use `Connection: close` to free TCP sockets promptly.
 * Messages are stored as validated fixed-size binary records in FFat. JSON is used for import and export.
 * Messages support Green, Orange (warning), and Red (emergency) priorities, with browser-side rendering and filtering.
-* The browser provides local input validation, client clock synchronization, and administrative import/export.
+* All service pages synchronize the device clock from the visiting browser; the message board also periodically corrects clock drift.
 * The camera snapshot is fetched once every 30 seconds by a background task, independently of the number of viewers.
 
 ## System Requirements
@@ -121,11 +122,11 @@ Supported import fields are `id`, `created_at` in UTC ISO-8601 format (`YYYY-MM-
 
 ### Message Board API
 
-* `GET /msg-board/api/messages` returns newest messages first. Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, and `c_time=<epoch>`.
+* `GET /msg-board/api/messages` returns newest messages first. Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, and `priority=green|orange|red|all`.
 * `POST /msg-board/api/messages` submits a message.
 * `GET /msg-board/api/messages/export.json` downloads the complete board as JSON.
 * `GET /msg-board/api/time` returns the current device clock state.
-* `POST /msg-board/api/time` sets the device time using form field `epoch`.
+* `POST /msg-board/api/time` sets the device time manually using form field `epoch`; it requires an admin session.
 
 Example response from `GET /msg-board/api/messages`:
 
@@ -148,6 +149,8 @@ These endpoints require the admin session cookie created by login:
 ### Device and Setup APIs
 
 `GET /api/status` returns Wi-Fi, heap, FFat, and board information.
+
+`POST /api/time/sync` accepts a form field `epoch` and submits a browser time sample to the device clock. The root, camera, and message-board pages call it when opened; the message board also calls it during its periodic refresh. Large corrections and corrections after manual time setting require agreement from three distinct clients whose samples are within 10 seconds of each other.
 
 The following setup pages and APIs are only available to clients connected to the `AREDN-Server-Setup` access point:
 
@@ -174,7 +177,6 @@ Invoke-WebRequest http://device-address/msg-board/api/messages -Method Post -Bod
   name = 'W6AM'
   text = 'Acknowledged.'
   priority = 'green'    # 'green' = normal, 'orange' = important, 'red' = urgent
-  c_time = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 }
 ```
 

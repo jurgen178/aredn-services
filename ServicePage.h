@@ -116,6 +116,22 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
     </nav>
     <footer>Services are hosted locally by the AREDN Server.</footer>
   </main>
+  <script>
+    async function synchronizeDeviceTime() {
+      try {
+        const response = await fetch('/api/time/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ epoch: String(Math.floor(Date.now() / 1000)) })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      } catch (error) {
+        console.error('Device clock synchronization failed:', error);
+      }
+    }
+
+    synchronizeDeviceTime();
+  </script>
 </body>
 </html>
 )AREDNSERVICE";
