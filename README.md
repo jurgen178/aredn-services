@@ -48,7 +48,7 @@ Choose either the web flasher or build from source.
 
 ### Flash with the web flasher
 
-The firmware can be flashed directly to the board from the [AREDN Server Web Flasher](https://bitfabrik.io/aredn-services-firmware/).
+The firmware can be flashed online directly to the board using the [AREDN Firmware Flasher](https://bitfabrik.io/aredn-server-firmware/).
 
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/web-flasher.png" alt="Web flasher" width="500">
 
