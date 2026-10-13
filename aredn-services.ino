@@ -789,6 +789,33 @@ void formatSerialClock(char* output, size_t outputSize)
   strftime(output, outputSize, "%H:%M:%S UTC", &utcTime);
 }
 
+bool parseUint32Parameter(const String& value, uint32_t& result)
+{
+  if (value.isEmpty())
+  {
+    return false;
+  }
+
+  uint32_t parsed = 0;
+  for (size_t index = 0; index < value.length(); ++index)
+  {
+    const char character = value[index];
+    if (character < '0' || character > '9')
+    {
+      return false;
+    }
+    const uint32_t digit = static_cast<uint32_t>(character - '0');
+    if (parsed > (UINT32_MAX - digit) / 10)
+    {
+      return false;
+    }
+    parsed = parsed * 10 + digit;
+  }
+
+  result = parsed;
+  return true;
+}
+
 bool constantTimeEquals(const char* candidate, const char* expected)
 {
   // Compare every expected byte so the response time does not reveal the matching prefix length.
@@ -996,8 +1023,6 @@ void writeMessageItems(AsyncResponseStream& response,
     return;
   }
 
-  // Search without an ID boundary needs a full scan; ordinary polling can use the sorted index.
-  const bool sequentialSearch = searchTerm != nullptr && beforeId == 0 && afterId == 0;
   const bool incrementalLatest = afterId != 0 && beforeId == 0 && searchTerm == nullptr;
   // Narrow incremental reads to the first newer ID; filtered and paged requests scan normally.
   const uint32_t firstIndexAfter = incrementalLatest
@@ -1532,6 +1557,7 @@ void registerRoutes()
     }
     const bool failed = state == nullptr || state->failed;
     const char* importError = messageBoard.importError();
+    const uint32_t importedCount = failed ? 0 : messageBoard.messageCount();
     releaseImportUploadState(request);
     if (failed)
     {
@@ -1542,7 +1568,11 @@ void registerRoutes()
     }
     else
     {
-      request->send(200, "application/json", "{\"imported\":true}");
+      char response[64];
+      snprintf(response, sizeof(response),
+               "{\"imported\":true,\"count\":%lu}",
+               static_cast<unsigned long>(importedCount));
+      request->send(200, "application/json", response);
     }
   }, nullptr, [](AsyncWebServerRequest* request, uint8_t* data,
                  size_t length, size_t index, size_t total)
@@ -1703,19 +1733,30 @@ void registerRoutes()
     uint32_t limit = 20;
     if (request->hasParam("limit"))
     {
-      const long requestedLimit = request->getParam("limit")->value().toInt();
-      limit = requestedLimit > 0 ? static_cast<uint32_t>(requestedLimit) : 20;
+      if (!parseUint32Parameter(request->getParam("limit")->value(), limit) || limit == 0)
+      {
+        request->send(400, "application/json", "{\"error\":\"invalid_limit\"}");
+        return;
+      }
       if (limit > 100)
       {
         limit = 100;
       }
     }
-    const uint32_t beforeId = request->hasParam("before")
-        ? request->getParam("before")->value().toInt()
-        : 0;
-    const uint32_t afterId = request->hasParam("after")
-        ? request->getParam("after")->value().toInt()
-        : 0;
+    uint32_t beforeId = 0;
+    if (request->hasParam("before") &&
+        !parseUint32Parameter(request->getParam("before")->value(), beforeId))
+    {
+      request->send(400, "application/json", "{\"error\":\"invalid_before\"}");
+      return;
+    }
+    uint32_t afterId = 0;
+    if (request->hasParam("after") &&
+        !parseUint32Parameter(request->getParam("after")->value(), afterId))
+    {
+      request->send(400, "application/json", "{\"error\":\"invalid_after\"}");
+      return;
+    }
     String searchTerm;
     if (request->hasParam("search"))
     {
@@ -1743,9 +1784,13 @@ void registerRoutes()
       }
     }
 
-    const uint32_t clientRevision = request->hasParam("rev")
-        ? request->getParam("rev")->value().toInt()
-        : 0;
+    uint32_t clientRevision = 0;
+    if (request->hasParam("rev") &&
+        !parseUint32Parameter(request->getParam("rev")->value(), clientRevision))
+    {
+      request->send(400, "application/json", "{\"error\":\"invalid_revision\"}");
+      return;
+    }
     const bool hasClientRevision = request->hasParam("rev") && clientRevision != 0;
     const String clientBootId = request->hasParam("boot")
         ? request->getParam("boot")->value()
@@ -1783,7 +1828,7 @@ void registerRoutes()
     uint32_t count = 0;
     writeMessageItems(*response, file, count, false, true, limit, beforeId, afterId, &hasMore,
               searchTerm.isEmpty() ? nullptr : &searchTerm, priorityFilter);
-    response->printf("],\"h\":%s,\"c\":%lu,\"b\":%lu,\"z\":%lu}",
+    response->printf("],\"h\":%s,\"c\":%lu,\"u\":%lu,\"z\":%lu}",
              hasMore ? "true" : "false",
                      static_cast<unsigned long>(messageBoard.messageCount()),
                      static_cast<unsigned long>(messageBoard.usedBytes()),

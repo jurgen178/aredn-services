@@ -151,7 +151,7 @@ These endpoints require the admin session cookie created by login. The session t
 * `POST /msg-board/api/admin/login` with form field `password`
 * `POST /msg-board/api/admin/logout` (admin session required)
 * `GET /msg-board/api/admin/status`
-* `POST /msg-board/api/admin/import` with an `application/json` file body
+* `POST /msg-board/api/admin/import` with an `application/json` file body; the successful response includes the number of imported messages
 * `DELETE /msg-board/api/admin/messages`
 * `DELETE /msg-board/api/admin/message?id=<id>`
 * `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority` (all required)
