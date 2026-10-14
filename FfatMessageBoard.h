@@ -65,6 +65,7 @@ public:
     }
     if (loadStorage())
     {
+      printStorageFiles("at startup");
       return true;
     }
     if (indexCapacity_ > 0 && index_ == nullptr)
@@ -78,13 +79,19 @@ public:
     FFat.format();
     if (loadStorage())
     {
+      printStorageFiles("after startup format");
       return true;
     }
 
     // The wear-levelling layer itself is damaged, so erase the whole partition.
     Serial.println("FFat is still unusable; erasing the whole FFat partition (this can take a while)");
     FFat.end();
-    return wipeFfatPartition() && loadStorage();
+    const bool recovered = wipeFfatPartition() && loadStorage();
+    if (recovered)
+    {
+      printStorageFiles("after startup partition recovery");
+    }
+    return recovered;
   }
 
   bool loadStorage()
@@ -297,6 +304,11 @@ public:
     {
       return SubmitResult::Unavailable;
     }
+    if (importInProgress_)
+    {
+      xSemaphoreGive(mutex_);
+      return SubmitResult::Unavailable;
+    }
     if (messageCount_ >= indexCapacity_)
     {
       xSemaphoreGive(mutex_);
@@ -340,12 +352,24 @@ public:
   // Replace the database with an empty, valid file rather than truncating the live file in place.
   bool reset()
   {
-    if (!ready() || importInProgress_ || xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
+    if (!ready() || xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
     {
+      return false;
+    }
+    if (importInProgress_)
+    {
+      xSemaphoreGive(mutex_);
       return false;
     }
 
     appendFile_.close();
+    importFile_.close();
+    if ((FFat.exists(IMPORT_PATH) && !FFat.remove(IMPORT_PATH)) ||
+        (FFat.exists(REPAIR_PATH) && !FFat.remove(REPAIR_PATH)))
+    {
+      xSemaphoreGive(mutex_);
+      return false;
+    }
     File replacement = FFat.open(REPAIR_PATH, FILE_WRITE);
     bool success = replacement && writeHeader(replacement);
     if (success)
@@ -372,9 +396,13 @@ public:
   // Format the FFat volume and recreate the empty message store.
   bool format()
   {
-    if (mutex_ == nullptr || importInProgress_ ||
-        xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
+    if (mutex_ == nullptr || xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
     {
+      return false;
+    }
+    if (importInProgress_)
+    {
+      xSemaphoreGive(mutex_);
       return false;
     }
 
@@ -421,6 +449,14 @@ public:
       return false;
     }
     appendFile_.close();
+    importFile_.close();
+    if ((FFat.exists(IMPORT_PATH) && !FFat.remove(IMPORT_PATH)) ||
+        (FFat.exists(REPAIR_PATH) && !FFat.remove(REPAIR_PATH)))
+    {
+      importError_ = "stale_import_cleanup_failed";
+      xSemaphoreGive(mutex_);
+      return false;
+    }
     const size_t freeBytes = FFat.totalBytes() - FFat.usedBytes();
     if (expectedBytes > freeBytes)
     {
@@ -428,8 +464,6 @@ public:
       xSemaphoreGive(mutex_);
       return false;
     }
-    FFat.remove(IMPORT_PATH);
-    FFat.remove(REPAIR_PATH);
     importFile_ = FFat.open(IMPORT_PATH, FILE_WRITE);
     importInProgress_ = static_cast<bool>(importFile_);
     if (!importInProgress_)
@@ -600,6 +634,29 @@ public:
   size_t freeBytes() const
   {
     return storageBusy_ ? 0 : FFat.totalBytes() - FFat.usedBytes();
+  }
+
+  void printStorageFiles(const char* phase) const
+  {
+    Serial.println("Storage:");
+    Serial.printf("  FFat %s used=%lu total=%lu\n", phase,
+                  static_cast<unsigned long>(FFat.usedBytes()),
+                  static_cast<unsigned long>(FFat.totalBytes()));
+    File root = FFat.open("/");
+    if (!root || !root.isDirectory())
+    {
+      Serial.println("  FFat root directory unavailable");
+      return;
+    }
+    File entry = root.openNextFile();
+    while (entry)
+    {
+      Serial.printf("  FFat file '%s' size=%lu\n", entry.name(),
+                    static_cast<unsigned long>(entry.size()));
+      entry.close();
+      entry = root.openNextFile();
+    }
+    root.close();
   }
 
   size_t recordSize() const

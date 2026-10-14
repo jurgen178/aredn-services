@@ -44,6 +44,7 @@ constexpr uint32_t CLIENT_TIME_SAMPLE_MAX_AGE_MS = 3600UL * 1000UL;
 constexpr char ADMIN_PASSWORD[] = "aredn-admin";
 constexpr char ADMIN_COOKIE_PREFIX[] = "aredn_admin=";
 constexpr size_t ADMIN_TOKEN_LENGTH = 32;
+constexpr size_t ADMIN_SESSION_CAPACITY = 4;
 constexpr uint32_t ADMIN_SESSION_LIFETIME_MS = 3600UL * 1000UL;
 constexpr uint8_t ADMIN_LOGIN_MAX_FAILURES = 5;
 constexpr uint32_t ADMIN_LOGIN_LOCKOUT_MS = 60000;
@@ -97,9 +98,13 @@ std::atomic<bool> wifiScanActive{false};
 SemaphoreHandle_t clientTimeMutex = nullptr;
 // The admin session and login throttling state below are protected by adminMutex.
 SemaphoreHandle_t adminMutex = nullptr;
-char adminToken[ADMIN_TOKEN_LENGTH + 1]{};
-bool adminSessionActive = false;
-uint32_t adminSessionStart = 0;
+struct AdminSession
+{
+  char token[ADMIN_TOKEN_LENGTH + 1]{};
+  uint32_t startedAt = 0;
+  bool active = false;
+};
+AdminSession adminSessions[ADMIN_SESSION_CAPACITY]{};
 uint8_t adminLoginFailures = 0;
 bool adminLoginLocked = false;
 uint32_t adminLoginLockStart = 0;
@@ -883,7 +888,7 @@ void recordFailedAdminLogin()
   xSemaphoreGive(adminMutex);
 }
 
-bool startAdminSession(char* tokenOut)
+bool startAdminSession(char* tokenOut, const char* existingToken)
 {
   // 128 random bits, always formatted with a fixed width so cookie comparison is exact.
   char token[ADMIN_TOKEN_LENGTH + 1];
@@ -896,10 +901,37 @@ bool startAdminSession(char* tokenOut)
   {
     return false;
   }
-  // There is one active administrator session; a new login replaces its token.
-  memcpy(adminToken, token, sizeof(adminToken));
-  adminSessionActive = true;
-  adminSessionStart = millis();
+  const uint32_t now = millis();
+  AdminSession* availableSession = nullptr;
+  AdminSession* matchingSession = nullptr;
+  for (AdminSession& session : adminSessions)
+  {
+    if (session.active && now - session.startedAt >= ADMIN_SESSION_LIFETIME_MS)
+    {
+      session.active = false;
+      memset(session.token, 0, sizeof(session.token));
+    }
+    if (existingToken != nullptr && session.active &&
+        constantTimeEquals(existingToken, session.token))
+    {
+      matchingSession = &session;
+    }
+    if (!session.active && availableSession == nullptr)
+    {
+      availableSession = &session;
+    }
+  }
+  AdminSession* selectedSession = matchingSession != nullptr
+      ? matchingSession
+      : availableSession;
+  if (selectedSession == nullptr)
+  {
+    xSemaphoreGive(adminMutex);
+    return false;
+  }
+  memcpy(selectedSession->token, token, sizeof(selectedSession->token));
+  selectedSession->startedAt = now;
+  selectedSession->active = true;
   adminLoginFailures = 0;
   xSemaphoreGive(adminMutex);
   memcpy(tokenOut, token, sizeof(token));
@@ -947,41 +979,13 @@ bool consumeFfatFormatChallenge(const char* challenge, const char* confirmation)
   return valid;
 }
 
-void endAdminSession()
+bool adminCookieToken(AsyncWebServerRequest* request, char* tokenOut)
 {
-  if (adminMutex != nullptr && xSemaphoreTake(adminMutex, portMAX_DELAY) == pdTRUE)
-  {
-    adminSessionActive = false;
-    memset(adminToken, 0, sizeof(adminToken));
-    xSemaphoreGive(adminMutex);
-  }
-}
-
-bool adminTokenMatches(const char* candidate)
-{
-  if (adminMutex == nullptr || xSemaphoreTake(adminMutex, portMAX_DELAY) != pdTRUE)
-  {
-    return false;
-  }
-  if (adminSessionActive && millis() - adminSessionStart >= ADMIN_SESSION_LIFETIME_MS)
-  {
-    adminSessionActive = false;
-    memset(adminToken, 0, sizeof(adminToken));
-  }
-  const bool matches = adminSessionActive && constantTimeEquals(candidate, adminToken);
-  xSemaphoreGive(adminMutex);
-  return matches;
-}
-
-bool isAdminAuthenticated(AsyncWebServerRequest* request)
-{
-  // Only the current in-memory token is accepted; restarting the device invalidates sessions.
-  if (!request->hasHeader("Cookie"))
+  if (request == nullptr || tokenOut == nullptr || !request->hasHeader("Cookie"))
   {
     return false;
   }
 
-  // Match the cookie by exact name and value rather than as a substring of the header.
   const String cookies = request->getHeader("Cookie")->value();
   const int length = static_cast<int>(cookies.length());
   int start = 0;
@@ -998,15 +1002,66 @@ bool isAdminAuthenticated(AsyncWebServerRequest* request)
     }
     if (cookies.startsWith(ADMIN_COOKIE_PREFIX, start))
     {
-      const String value = cookies.substring(start + strlen(ADMIN_COOKIE_PREFIX), end);
-      if (adminTokenMatches(value.c_str()))
+      const int valueStart = start + strlen(ADMIN_COOKIE_PREFIX);
+      if (end - valueStart != static_cast<int>(ADMIN_TOKEN_LENGTH))
       {
-        return true;
+        return false;
       }
+      cookies.substring(valueStart, end).toCharArray(tokenOut, ADMIN_TOKEN_LENGTH + 1);
+      return true;
     }
     start = end + 1;
   }
   return false;
+}
+
+void endAdminSession(const char* candidate)
+{
+  if (candidate != nullptr && adminMutex != nullptr &&
+      xSemaphoreTake(adminMutex, portMAX_DELAY) == pdTRUE)
+  {
+    for (AdminSession& session : adminSessions)
+    {
+      if (session.active && constantTimeEquals(candidate, session.token))
+      {
+        session.active = false;
+        memset(session.token, 0, sizeof(session.token));
+        break;
+      }
+    }
+    xSemaphoreGive(adminMutex);
+  }
+}
+
+bool adminTokenMatches(const char* candidate)
+{
+  if (candidate == nullptr || adminMutex == nullptr ||
+      xSemaphoreTake(adminMutex, portMAX_DELAY) != pdTRUE)
+  {
+    return false;
+  }
+  const uint32_t now = millis();
+  bool matches = false;
+  for (AdminSession& session : adminSessions)
+  {
+    if (session.active && now - session.startedAt >= ADMIN_SESSION_LIFETIME_MS)
+    {
+      session.active = false;
+      memset(session.token, 0, sizeof(session.token));
+    }
+    if (session.active && constantTimeEquals(candidate, session.token))
+    {
+      matches = true;
+    }
+  }
+  xSemaphoreGive(adminMutex);
+  return matches;
+}
+
+bool isAdminAuthenticated(AsyncWebServerRequest* request)
+{
+  char token[ADMIN_TOKEN_LENGTH + 1]{};
+  return adminCookieToken(request, token) && adminTokenMatches(token);
 }
 
 bool isSetupApClient(AsyncWebServerRequest* request)
@@ -1638,7 +1693,9 @@ void registerRoutes()
     }
 
     char token[ADMIN_TOKEN_LENGTH + 1];
-    if (!startAdminSession(token))
+    char existingToken[ADMIN_TOKEN_LENGTH + 1]{};
+    const bool hasExistingToken = adminCookieToken(request, existingToken);
+    if (!startAdminSession(token, hasExistingToken ? existingToken : nullptr))
     {
       request->send(503, "application/json", "{\"error\":\"admin_unavailable\"}");
       return;
@@ -1658,7 +1715,9 @@ void registerRoutes()
       sendAdminRequired(request);
       return;
     }
-    endAdminSession();
+    char token[ADMIN_TOKEN_LENGTH + 1]{};
+    adminCookieToken(request, token);
+    endAdminSession(token);
     AsyncWebServerResponse* response = request->beginResponse(
         200, "application/json", "{\"authenticated\":false}");
     response->addHeader("Set-Cookie", String(ADMIN_COOKIE_PREFIX) +
