@@ -9,7 +9,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#173b33">
-  <title>Camera Snapshot · AREDN Server</title>
+  <title>Camera Snapshot · AREDN Services</title>
   <style>
     :root {
       color-scheme: light;

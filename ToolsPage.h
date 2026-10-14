@@ -9,7 +9,7 @@ static const char TOOLS_PAGE[] PROGMEM = R"AREDN_TOOLS(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#173b33">
-  <title>Radio Tools · AREDN Server</title>
+  <title>Radio Tools · AREDN Services</title>
   <style>
     :root { color-scheme: light; font-family: "Trebuchet MS", "Segoe UI", sans-serif; color: #172722; background: #f3f5ef; }
     * { box-sizing: border-box; }

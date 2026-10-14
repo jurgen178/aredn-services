@@ -1,4 +1,4 @@
-# AREDN Server for ESP32
+# AREDN Services for ESP32
 
 An experimental lightweight local web server for the **AREDN (Amateur Radio Emergency Data Network)**. It runs on an Arduino Nano ESP32 and provides a message board, a camera snapshot page, and browser-based radio calculators without requiring external internet or central server infrastructure.
 
@@ -48,7 +48,7 @@ Choose either the web flasher or build from source.
 
 ### Flash with the web flasher
 
-The firmware can be flashed online directly to the board using the [AREDN Firmware Flasher](https://bitfabrik.io/aredn-server-firmware/).
+The firmware can be flashed online directly to the board using the [AREDN Firmware Flasher](https://bitfabrik.io/aredn-services-firmware/).
 
 <img src="https://github.com/jurgen178/aredn-services/blob/main/doc/web-flasher.png" alt="Web flasher" width="500">
 

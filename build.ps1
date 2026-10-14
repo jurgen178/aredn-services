@@ -20,8 +20,8 @@ $ArduinoCli = "$CliDir\arduino-cli.exe"
 $LibraryDir = "$CliDir\libraries"
 $BuildDir   = Join-Path $PSScriptRoot "build"
 $ReleaseRoot = Join-Path $PSScriptRoot "web-flasher\releases"
-$ReleaseDirectory = Join-Path $ReleaseRoot "aredn-message-board-v$Version"
-$ReleaseZip = Join-Path $ReleaseRoot "aredn-message-board-v$Version.zip"
+$ReleaseDirectory = Join-Path $ReleaseRoot "aredn-services-v$Version"
+$ReleaseZip = Join-Path $ReleaseRoot "aredn-services-v$Version.zip"
 $PublicReleaseDirectory = Join-Path $PSScriptRoot "web-flasher\public\releases"
 $WebFlasherDirectory = Join-Path $PSScriptRoot "web-flasher"
 $WebFlasherPort = 5173  # 5173 is the standard port for Vite
@@ -114,8 +114,8 @@ if (Test-Path $ReleaseIndexPath) {
 }
 $ReleaseEntries += [ordered]@{
     version = $Version
-    label = "AREDN Server"
-    url = "./releases/aredn-message-board-v$Version.zip"
+    label = "AREDN Services"
+    url = "./releases/aredn-services-v$Version.zip"
 }
 ConvertTo-Json -InputObject $ReleaseEntries -Depth 4 | Set-Content $ReleaseIndexPath
 Write-Host "Release created: $ReleaseZip" -ForegroundColor Green

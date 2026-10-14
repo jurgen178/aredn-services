@@ -9,7 +9,7 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#173b33">
-  <title>AREDN Server</title>
+  <title>AREDN Services</title>
   <style>
     :root {
       color-scheme: light;
@@ -104,7 +104,7 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
   <header>
     <div class="header-inner">
       <p class="header-label">AREDN · Local services</p>
-      <h1>AREDN Server</h1>
+      <h1>AREDN Services</h1>
       <p>Choose a service available on this local AREDN node.</p>
       <p class="experimental-note">EXPERIMENTAL ESP32 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
     </div>
