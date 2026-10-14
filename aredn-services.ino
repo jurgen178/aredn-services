@@ -1667,7 +1667,8 @@ void registerRoutes()
         abortUnfinishedImport(static_cast<ImportUploadState*>(request->_tempObject));
       });
       const bool claimed = !importUploadActive.exchange(true, std::memory_order_acq_rel);
-      if (state == nullptr || !claimed || !isAdminAuthenticated(request) ||
+      const bool authenticated = isAdminAuthenticated(request);
+      if (state == nullptr || !claimed || !authenticated ||
           !messageBoard.beginImport(total))
       {
         if (claimed)
@@ -1677,6 +1678,14 @@ void registerRoutes()
         if (state != nullptr)
         {
           state->failed = true;
+          if (!claimed)
+          {
+            state->error = "import_in_progress";
+          }
+          else if (!authenticated)
+          {
+            state->error = "admin_required";
+          }
         }
       }
       else
@@ -1689,6 +1698,7 @@ void registerRoutes()
         !messageBoard.appendImportData(data, length))
     {
       state->failed = true;
+      state->error = "upload_write_failed";
     }
     if (index + length == total && state != nullptr && state->started)
     {

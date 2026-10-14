@@ -506,7 +506,11 @@ public:
     if (success && locked)
     {
       success = installRepairFile();
-      if (success)
+      if (!success)
+      {
+        importError_ = "install_failed";
+      }
+      else
       {
         FFat.remove(BACKUP_PATH);
         nextId_ = highestId == UINT32_MAX ? 1 : highestId + 1;
@@ -1295,6 +1299,12 @@ private:
     if (!ready() || targetId == 0 || (!removeMessage && (name == nullptr || text == nullptr)) ||
         xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
     {
+      return false;
+    }
+    // An import parses into REPAIR_PATH without holding the mutex, so it must not be shared.
+    if (importInProgress_)
+    {
+      xSemaphoreGive(mutex_);
       return false;
     }
 
