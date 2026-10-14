@@ -79,6 +79,7 @@ std::atomic<ImportJobState> importJobState{ImportJobState::Idle};
 std::atomic<uint32_t> importJobCount{0};
 const char* importJobReason = "none";
 enum class MessageMutationType : uint8_t { Delete, Update };
+enum class MessageMutationStart : uint8_t { Started, Busy, Unavailable };
 struct MessageMutationJob
 {
   MessageMutationType type = MessageMutationType::Delete;
@@ -1165,23 +1166,23 @@ void messageMutationTask(void*)
   vTaskDelete(nullptr);
 }
 
-bool startMessageMutation(const MessageMutationJob& job)
+MessageMutationStart startMessageMutation(const MessageMutationJob& job)
 {
   bool expected = false;
   if (!messageMutationActive.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
   {
-    return false;
+    return MessageMutationStart::Busy;
   }
   messageMutationJob = job;
   messageMutationState.store(ImportJobState::Running, std::memory_order_release);
   if (xTaskCreatePinnedToCore(messageMutationTask, "messageMutation", 8192, nullptr, 1,
                               nullptr, 1) == pdPASS)
   {
-    return true;
+    return MessageMutationStart::Started;
   }
   messageMutationState.store(ImportJobState::Idle, std::memory_order_release);
   messageMutationActive.store(false, std::memory_order_release);
-  return false;
+  return MessageMutationStart::Unavailable;
 }
 
 void writeMessageItems(AsyncResponseStream& response,
@@ -1332,6 +1333,11 @@ void handleSubmitMessage(AsyncWebServerRequest* request)
   if (result == FfatMessageBoard::SubmitResult::Full)
   {
     request->send(409, "application/json", "{\"error\":\"board_full\"}");
+    return;
+  }
+  if (result == FfatMessageBoard::SubmitResult::Busy)
+  {
+    request->send(503, "application/json", "{\"error\":\"board_busy\"}");
     return;
   }
   if (result != FfatMessageBoard::SubmitResult::Accepted)
@@ -1659,9 +1665,12 @@ void registerRoutes()
       return;
     }
     File file;
-    if (!messageBoard.openReaderExclusive(file))
+    bool boardBusy = false;
+    if (!messageBoard.openReaderExclusive(file, boardBusy))
     {
-      request->send(500, "application/json", "{\"error\":\"board_unavailable\"}");
+      request->send(boardBusy ? 503 : 500, "application/json",
+                    boardBusy ? "{\"error\":\"board_busy\"}" :
+                                "{\"error\":\"board_unavailable\"}");
       return;
     }
 
@@ -1865,6 +1874,11 @@ void registerRoutes()
       sendAdminRequired(request);
       return;
     }
+    if (messageMutationActive.load(std::memory_order_acquire))
+    {
+      request->send(200, "application/json", "{\"state\":\"processing\"}");
+      return;
+    }
     switch (messageMutationState.load(std::memory_order_acquire))
     {
       case ImportJobState::Running:
@@ -1921,7 +1935,13 @@ void registerRoutes()
     MessageMutationJob job;
     job.type = MessageMutationType::Delete;
     job.id = id;
-    if (!startMessageMutation(job))
+    const MessageMutationStart startResult = startMessageMutation(job);
+    if (startResult == MessageMutationStart::Busy)
+    {
+      request->send(409, "application/json", "{\"error\":\"board_busy\"}");
+      return;
+    }
+    if (startResult != MessageMutationStart::Started)
     {
       request->send(503, "application/json", "{\"error\":\"message_worker_unavailable\"}");
       return;
@@ -1982,7 +2002,13 @@ void registerRoutes()
     job.priority = priority;
     memcpy(job.name, name.c_str(), name.length() + 1);
     memcpy(job.text, text.c_str(), text.length() + 1);
-    if (!startMessageMutation(job))
+    const MessageMutationStart startResult = startMessageMutation(job);
+    if (startResult == MessageMutationStart::Busy)
+    {
+      request->send(409, "application/json", "{\"error\":\"board_busy\"}");
+      return;
+    }
+    if (startResult != MessageMutationStart::Started)
     {
       request->send(503, "application/json", "{\"error\":\"message_worker_unavailable\"}");
       return;
@@ -2114,9 +2140,12 @@ void registerRoutes()
         : String();
 
     File file;
-    if (!messageBoard.openReaderExclusive(file))
+    bool boardBusy = false;
+    if (!messageBoard.openReaderExclusive(file, boardBusy))
     {
-      request->send(500, "application/json", "{\"error\":\"board_unavailable\"}");
+      request->send(boardBusy ? 503 : 500, "application/json",
+                    boardBusy ? "{\"error\":\"board_busy\"}" :
+                                "{\"error\":\"board_unavailable\"}");
       return;
     }
 

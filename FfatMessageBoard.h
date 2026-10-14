@@ -48,6 +48,7 @@ public:
     Accepted,
     Invalid,
     Full,
+    Busy,
     Unavailable
   };
 
@@ -283,9 +284,13 @@ public:
                        Priority priority,
                        uint32_t& id)
   {
-    if (!ready() || importInProgress_)
+    if (!ready())
     {
       return SubmitResult::Unavailable;
+    }
+    if (importInProgress_)
+    {
+      return SubmitResult::Busy;
     }
     if (name == nullptr || text == nullptr)
     {
@@ -300,14 +305,14 @@ public:
       return SubmitResult::Invalid;
     }
 
-    if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
+    if (xSemaphoreTake(mutex_, 0) != pdTRUE)
     {
-      return SubmitResult::Unavailable;
+      return SubmitResult::Busy;
     }
     if (importInProgress_)
     {
       xSemaphoreGive(mutex_);
-      return SubmitResult::Unavailable;
+      return SubmitResult::Busy;
     }
     if (messageCount_ >= indexCapacity_)
     {
@@ -690,10 +695,16 @@ public:
     return success;
   }
 
-  bool openReaderExclusive(File& file) const
+  bool openReaderExclusive(File& file, bool& busy) const
   {
-    if (mutex_ == nullptr || xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
+    busy = false;
+    if (mutex_ == nullptr)
     {
+      return false;
+    }
+    if (xSemaphoreTake(mutex_, 0) != pdTRUE)
+    {
+      busy = true;
       return false;
     }
     if (!openReaderUnlocked(file))

@@ -827,6 +827,30 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       }
     }
 
+    async function fetchBoardReadWhenAvailable(endpoint, onBusy = null) {
+      let retryDelayMs = 250;
+      for (;;) {
+        const response = await fetch(endpoint, { cache: 'no-store' });
+        if (response.status !== 503) return response;
+        const error = await response.json().catch(() => null);
+        if (!error || error.error !== 'board_busy') return response;
+        if (onBusy) onBusy();
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelayMs));
+        retryDelayMs = Math.min(2000, retryDelayMs * 2);
+      }
+    }
+
+    async function waitForOtherAdminMutation() {
+      operationDialogMessage.textContent =
+        'Another administrator is changing the board. This dialog will close when they finish. Your change has not been made; please retry after it closes.';
+      const outcome = await waitForJob(`${API_BASE}/admin/message/mutation/status`);
+      if (outcome.state === 'unauthorized') {
+        setAdminState(false, 'Your admin session has expired.');
+        return;
+      }
+      setAdminError('The other administrator has finished. Your change was not applied; please retry it now.');
+    }
+
     async function exportMessages(event) {
       event.preventDefault();
       showOperationDialog('Exporting messages', 'The board is preparing the complete message archive.');
@@ -835,15 +859,31 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         let beforeId = 0;
         let storedCount = 0;
         let hasMore = true;
+        let snapshotRevision = null;
+        let snapshotBootId = null;
         while (hasMore) {
           const endpoint = beforeId === 0
             ? `${API_BASE}/messages?limit=100`
             : `${API_BASE}/messages?before=${beforeId}&limit=100`;
-          const response = await fetch(endpoint, { cache: 'no-store' });
+          const response = await fetchBoardReadWhenAvailable(endpoint, () =>
+            operationDialogMessage.textContent = 'Waiting for the board operation to finish ...');
           if (!response.ok) {
             throw new Error('Export page failed');
           }
           const page = await response.json();
+          if (snapshotRevision === null) {
+            snapshotRevision = page.r;
+            snapshotBootId = page.b;
+          } else if (page.r !== snapshotRevision || page.b !== snapshotBootId) {
+            messages.length = 0;
+            beforeId = 0;
+            storedCount = 0;
+            hasMore = true;
+            snapshotRevision = null;
+            snapshotBootId = null;
+            operationDialogMessage.textContent = 'The board changed during export. Restarting ...';
+            continue;
+          }
           storedCount = page.c;
           messages.push(...page.p.map((message) => {
             const exportedMessage = {
@@ -1188,6 +1228,15 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           setAdminState(false, 'Your admin session has expired.');
           return;
         }
+        if (response.status === 409) {
+          const data = await response.json().catch(() => ({}));
+          if (data.error === 'board_busy') {
+            await waitForOtherAdminMutation();
+          } else {
+            setAdminError('The board is busy with another operation. Please try again.');
+          }
+          return;
+        }
         if (response.status === 202) {
           const outcome = await waitForJob(`${API_BASE}/admin/message/mutation/status`);
           if (outcome.state === 'unauthorized') {
@@ -1230,6 +1279,15 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         const response = await fetch(`${API_BASE}/admin/message?id=${id}`, { method: 'DELETE' });
         if (response.status === 401) {
           setAdminState(false, 'Your admin session has expired.');
+          return;
+        }
+        if (response.status === 409) {
+          const data = await response.json().catch(() => ({}));
+          if (data.error === 'board_busy') {
+            await waitForOtherAdminMutation();
+          } else {
+            setAdminError('The board is busy with another operation. Please try again.');
+          }
           return;
         }
         if (response.status === 202) {
@@ -1310,7 +1368,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
             (searchActive ? `&search=${encodeURIComponent(searchTerm)}` : '') + priorityQuery;
         }
         endpoint += revisionQuery;
-        const response = await fetch(endpoint, { cache: 'no-store' });
+        const response = await fetchBoardReadWhenAvailable(endpoint);
         if (!response.ok) throw new Error('Board unavailable');
         const data = await response.json();
         if (requestGeneration !== viewGeneration) {
@@ -1400,17 +1458,24 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           })
         });
 
-        if (response.status === 429) {
+        let submitError = null;
+        if (response.status === 503) {
+          submitError = await response.json().catch(() => ({}));
+        }
+        const waitForBoard = submitError !== null && submitError.error === 'board_busy';
+        if (response.status === 429 || waitForBoard) {
           retryCount += 1;
           const delay = Math.min(8000, 1000 * (2 ** Math.min(retryCount - 1, 3))) + Math.random() * 400;
-          setBusy(true, 'Waiting for space');
-          setFormStatus('Many messages at once. Your text is saved here; retrying in a few seconds.');
+          setBusy(true, waitForBoard ? 'Waiting for board' : 'Waiting for space');
+          setFormStatus(waitForBoard
+            ? 'An administrator is changing the board. Your text is saved here; retrying shortly.'
+            : 'Many messages at once. Your text is saved here; retrying in a few seconds.');
           retryTimer = setTimeout(submitMessage, delay);
           return;
         }
 
         if (response.status !== 202) {
-          const data = await response.json().catch(() => ({}));
+          const data = submitError || await response.json().catch(() => ({}));
           setBusy(false, 'Try again');
           setFormStatus(data.error === 'too_long'
             ? 'The name or message is too long.'

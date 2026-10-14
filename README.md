@@ -132,7 +132,7 @@ Supported import fields are `id`, `created_at` in UTC ISO-8601 format (`YYYY-MM-
 
 ### Message Board API
 
-* `GET /msg-board/api/messages` returns newest messages first, at most 100 per request (default 20). Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, `rev=<revision>`, and `boot=<boot-id>`. Clients pass the revision (`r`) and boot ID (`b`) from their previous response as `rev` and `boot`; the response flag `f` is then `true` when a message was edited, deleted, imported, or reset after that revision, or when the device has restarted, and the client must reload the list instead of polling incrementally.
+* `GET /msg-board/api/messages` returns newest messages first, at most 100 per request (default 20). Optional parameters: `limit=<n>`, `after=<id>`, `before=<id>`, `search=<term>`, `priority=green|orange|red|all`, `rev=<revision>`, and `boot=<boot-id>`. Clients pass the revision (`r`) and boot ID (`b`) from their previous response as `rev` and `boot`; the response flag `f` is then `true` when a message was edited, deleted, imported, or reset after that revision, or when the device has restarted, and the client must reload the list instead of polling incrementally. It returns `503` with `{"error":"board_busy"}` instead of waiting if a board write currently holds the storage lock; the web UI retries these reads.
 * `POST /msg-board/api/messages` submits a message.
 * `GET /msg-board/api/messages/export.json` downloads the complete board as JSON; it requires an admin session.
 * `GET /msg-board/api/time` returns the current device clock state.
@@ -153,7 +153,7 @@ These endpoints require the admin session cookie created by login. Up to four ad
 * `GET /msg-board/api/admin/status`
 * `POST /msg-board/api/admin/import` with an `application/json` file body; the board answers `202` once the upload is stored and finishes the import in a background task
 * `GET /msg-board/api/admin/import/status` reports `{"state":"processing"}`, `{"state":"done","count":<n>}`, `{"state":"failed","reason":"<reason>"}`, or `{"state":"idle"}`
-* `DELETE /msg-board/api/admin/message?id=<id>` and `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority` return `202` while the board edits or deletes the message in a background task
+* `DELETE /msg-board/api/admin/message?id=<id>` and `POST /msg-board/api/admin/message?id=<id>` with form fields `name`, `text`, and `priority` return `202` while the board edits or deletes the message in a background task. Only one edit/delete runs at a time; a competing request gets `409` with `{"error":"board_busy"}` and its browser waits for the active operation to finish before asking the administrator to retry.
 * `GET /msg-board/api/admin/message/mutation/status` reports `{"state":"processing"}`, `{"state":"done"}`, `{"state":"failed"}`, or `{"state":"idle"}`
 * `DELETE /msg-board/api/admin/messages`
 * `POST /msg-board/api/admin/format/prepare` starts the time-limited confirmation for a full FFat reset
