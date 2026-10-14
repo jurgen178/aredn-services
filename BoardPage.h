@@ -809,6 +809,24 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       });
     }
 
+    // The board finishes an import in the background; poll until it reports the outcome.
+    async function waitForImport() {
+      let failures = 0;
+      for (;;) {
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+        try {
+          const response = await fetch(`${API_BASE}/admin/import/status`, { cache: 'no-store' });
+          if (response.status === 401) return { state: 'unauthorized' };
+          if (!response.ok) throw new Error('Import status failed');
+          const status = await response.json();
+          failures = 0;
+          if (status.state !== 'processing') return status;
+        } catch (error) {
+          if (++failures >= 20) throw error;
+        }
+      }
+    }
+
     async function exportMessages(event) {
       event.preventDefault();
       showOperationDialog('Exporting messages', 'The board is preparing the complete message archive.');
@@ -1534,6 +1552,18 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           const detail = reason ? ` (${reason})` : '';
           setAdminError(`Import failed${detail}.`);
           return;
+        }
+        if (response.status === 202) {
+          const outcome = await waitForImport();
+          if (outcome.state === 'unauthorized') {
+            setAdminState(false, 'Your admin session has expired.');
+            return;
+          }
+          if (outcome.state !== 'done') {
+            const detail = outcome.reason ? ` (${outcome.reason})` : '';
+            setAdminError(`Import failed${detail}.`);
+            return;
+          }
         }
         adminStatus.textContent = 'Messages imported.';
         try {

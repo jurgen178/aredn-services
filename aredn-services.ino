@@ -72,6 +72,11 @@ uint32_t boardRevision = 1;
 uint32_t fullRefreshRevision = 0;
 char deviceBootId[BOARD_BOOT_ID_LENGTH + 1]{};
 std::atomic<bool> importUploadActive{false};
+// The import is finished by a worker task, so these are written there and read by the status route.
+enum class ImportJobState : uint8_t { Idle, Running, Succeeded, Failed };
+std::atomic<ImportJobState> importJobState{ImportJobState::Idle};
+std::atomic<uint32_t> importJobCount{0};
+const char* importJobReason = "none";
 std::atomic<bool> wifiCredentialsSaved{false};
 std::atomic<bool> wifiConfigRequestPending{false};
 std::atomic<uint8_t> wifiProvisionState{0};
@@ -137,6 +142,7 @@ struct ImportUploadState
   bool failed = false;
   bool started = false;
   bool finished = false;
+  const char* error = nullptr;
 };
 
 void drawDisplayLine(uint8_t row, const char* label, const char* value)
@@ -1046,6 +1052,36 @@ void abortUnfinishedImport(const ImportUploadState* state)
   }
 }
 
+// Parsing a large import takes up to a minute. It must not run in the async_tcp task: that task
+// has to keep draining AsyncTCP's fixed-size event queue, otherwise lwIP's tcpip thread blocks on
+// the full queue and the next response write deadlocks against it until the task watchdog fires.
+void importFinishTask(void*)
+{
+  const bool success = messageBoard.finishImport();
+  importJobReason = messageBoard.importError();
+  importJobCount.store(success ? messageBoard.messageCount() : 0, std::memory_order_relaxed);
+  if (success)
+  {
+    markBoardChanged(true);
+  }
+  importJobState.store(success ? ImportJobState::Succeeded : ImportJobState::Failed,
+                       std::memory_order_release);
+  importUploadActive.store(false, std::memory_order_release);
+  vTaskDelete(nullptr);
+}
+
+bool startImportFinish()
+{
+  importJobState.store(ImportJobState::Running, std::memory_order_release);
+  // Core 1 keeps the worker away from the networking tasks and the watched idle task on core 0.
+  if (xTaskCreatePinnedToCore(importFinishTask, "importFinish", 12288, nullptr, 1, nullptr, 1) == pdPASS)
+  {
+    return true;
+  }
+  importJobState.store(ImportJobState::Idle, std::memory_order_release);
+  return false;
+}
+
 void writeMessageItems(AsyncResponseStream& response,
                        File& file,
                        uint32_t& count,
@@ -1602,8 +1638,8 @@ void registerRoutes()
       return;
     }
     const bool failed = state == nullptr || state->failed;
-    const char* importError = messageBoard.importError();
-    const uint32_t importedCount = failed ? 0 : messageBoard.messageCount();
+    const char* importError = state != nullptr && state->error != nullptr
+        ? state->error : messageBoard.importError();
     releaseImportUploadState(request);
     if (failed)
     {
@@ -1614,11 +1650,8 @@ void registerRoutes()
     }
     else
     {
-      char response[64];
-      snprintf(response, sizeof(response),
-               "{\"imported\":true,\"count\":%lu}",
-               static_cast<unsigned long>(importedCount));
-      request->send(200, "application/json", response);
+      // The upload is complete; the worker is still installing it. The page polls the status route.
+      request->send(202, "application/json", "{\"processing\":true}");
     }
   }, nullptr, [](AsyncWebServerRequest* request, uint8_t* data,
                  size_t length, size_t index, size_t total)
@@ -1657,25 +1690,54 @@ void registerRoutes()
     {
       state->failed = true;
     }
-    if (index + length == total)
+    if (index + length == total && state != nullptr && state->started)
     {
-      if (state != nullptr && state->started && state->failed)
-      {
-        messageBoard.abortImport();
-      }
-      else if (state != nullptr && state->started && !messageBoard.finishImport())
+      if (!state->failed && !startImportFinish())
       {
         state->failed = true;
+        state->error = "worker_unavailable";
       }
-      if (state != nullptr && state->started)
+      if (state->failed)
       {
+        messageBoard.abortImport();
         importUploadActive.store(false, std::memory_order_release);
-        state->finished = true;
-        if (!state->failed)
-        {
-          markBoardChanged(true);
-        }
       }
+      // From here the worker owns the staged import and the import slot.
+      state->finished = true;
+    }
+  });
+
+  server.on("/msg-board/api/admin/import/status", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (!isAdminAuthenticated(request))
+    {
+      sendAdminRequired(request);
+      return;
+    }
+    switch (importJobState.load(std::memory_order_acquire))
+    {
+      case ImportJobState::Running:
+        request->send(200, "application/json", "{\"state\":\"processing\"}");
+        break;
+      case ImportJobState::Succeeded:
+      {
+        char response[48];
+        snprintf(response, sizeof(response), "{\"state\":\"done\",\"count\":%lu}",
+                 static_cast<unsigned long>(importJobCount.load(std::memory_order_relaxed)));
+        request->send(200, "application/json", response);
+        break;
+      }
+      case ImportJobState::Failed:
+      {
+        String response = "{\"state\":\"failed\",\"reason\":\"";
+        response += importJobReason;
+        response += "\"}";
+        request->send(200, "application/json", response);
+        break;
+      }
+      default:
+        request->send(200, "application/json", "{\"state\":\"idle\"}");
+        break;
     }
   });
 

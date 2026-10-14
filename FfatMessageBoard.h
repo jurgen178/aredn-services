@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <FFat.h>
+#include <atomic>
 #include <cctype>
 #include <cstddef>
 #include <cstdio>
@@ -459,6 +460,8 @@ public:
   }
 
   // Validate and install the staged import; on failure the previous board remains installed.
+  // Parsing can take a minute, so it runs without the board mutex: it only touches the staged
+  // files, and importInProgress_ keeps every writer out. The mutex covers only the short install.
   bool finishImport()
   {
     if (xSemaphoreTake(mutex_, portMAX_DELAY) != pdTRUE)
@@ -475,6 +478,7 @@ public:
 
     importFile_.flush();
     importFile_.close();
+    xSemaphoreGive(mutex_);
 
     // Parse into a repair file, then swap it in so malformed JSON cannot replace live data.
     FFat.remove(BACKUP_PATH);
@@ -498,7 +502,8 @@ public:
     {
       replacement.close();
     }
-    if (success)
+    const bool locked = xSemaphoreTake(mutex_, portMAX_DELAY) == pdTRUE;
+    if (success && locked)
     {
       success = installRepairFile();
       if (success)
@@ -515,7 +520,9 @@ public:
     }
     else
     {
-      importError_ = !sourceOpened ? "import_file_open_failed"
+      success = false;
+      importError_ = !locked ? "mutex_unavailable"
+          : !sourceOpened ? "import_file_open_failed"
           : !replacementOpened ? "repair_file_open_failed"
           : "json_parse_failed";
       FFat.remove(REPAIR_PATH);
@@ -526,7 +533,10 @@ public:
     {
       importError_ = "none";
     }
-    xSemaphoreGive(mutex_);
+    if (locked)
+    {
+      xSemaphoreGive(mutex_);
+    }
     return success;
   }
 
@@ -1436,6 +1446,7 @@ private:
   volatile bool storageBusy_ = false;
   uint32_t nextId_ = 1;
   uint32_t messageCount_ = 0;
-  bool importInProgress_ = false;
+  // Read without the mutex by writers while the import worker parses.
+  std::atomic<bool> importInProgress_{false};
   const char* importError_ = "none";
 };
