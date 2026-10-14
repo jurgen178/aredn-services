@@ -77,6 +77,18 @@ enum class ImportJobState : uint8_t { Idle, Running, Succeeded, Failed };
 std::atomic<ImportJobState> importJobState{ImportJobState::Idle};
 std::atomic<uint32_t> importJobCount{0};
 const char* importJobReason = "none";
+enum class MessageMutationType : uint8_t { Delete, Update };
+struct MessageMutationJob
+{
+  MessageMutationType type = MessageMutationType::Delete;
+  uint32_t id = 0;
+  FfatMessageBoard::Priority priority = FfatMessageBoard::Priority::Green;
+  char name[FfatMessageBoard::MAX_NAME_LENGTH + 1]{};
+  char text[FfatMessageBoard::MAX_MESSAGE_LENGTH + 1]{};
+};
+MessageMutationJob messageMutationJob;
+std::atomic<bool> messageMutationActive{false};
+std::atomic<ImportJobState> messageMutationState{ImportJobState::Idle};
 std::atomic<bool> wifiCredentialsSaved{false};
 std::atomic<bool> wifiConfigRequestPending{false};
 std::atomic<uint8_t> wifiProvisionState{0};
@@ -1082,6 +1094,41 @@ bool startImportFinish()
   return false;
 }
 
+void messageMutationTask(void*)
+{
+  const MessageMutationJob job = messageMutationJob;
+  const bool success = job.type == MessageMutationType::Delete
+      ? messageBoard.remove(job.id)
+      : messageBoard.update(job.id, job.name, job.text, job.priority);
+  if (success)
+  {
+    markBoardChanged(true);
+  }
+  messageMutationState.store(success ? ImportJobState::Succeeded : ImportJobState::Failed,
+                             std::memory_order_release);
+  messageMutationActive.store(false, std::memory_order_release);
+  vTaskDelete(nullptr);
+}
+
+bool startMessageMutation(const MessageMutationJob& job)
+{
+  bool expected = false;
+  if (!messageMutationActive.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+  {
+    return false;
+  }
+  messageMutationJob = job;
+  messageMutationState.store(ImportJobState::Running, std::memory_order_release);
+  if (xTaskCreatePinnedToCore(messageMutationTask, "messageMutation", 8192, nullptr, 1,
+                              nullptr, 1) == pdPASS)
+  {
+    return true;
+  }
+  messageMutationState.store(ImportJobState::Idle, std::memory_order_release);
+  messageMutationActive.store(false, std::memory_order_release);
+  return false;
+}
+
 void writeMessageItems(AsyncResponseStream& response,
                        File& file,
                        uint32_t& count,
@@ -1751,6 +1798,31 @@ void registerRoutes()
     }
   });
 
+  server.on("/msg-board/api/admin/message/mutation/status", HTTP_GET,
+            [](AsyncWebServerRequest* request)
+  {
+    if (!isAdminAuthenticated(request))
+    {
+      sendAdminRequired(request);
+      return;
+    }
+    switch (messageMutationState.load(std::memory_order_acquire))
+    {
+      case ImportJobState::Running:
+        request->send(200, "application/json", "{\"state\":\"processing\"}");
+        break;
+      case ImportJobState::Succeeded:
+        request->send(200, "application/json", "{\"state\":\"done\"}");
+        break;
+      case ImportJobState::Failed:
+        request->send(200, "application/json", "{\"state\":\"failed\"}");
+        break;
+      default:
+        request->send(200, "application/json", "{\"state\":\"idle\"}");
+        break;
+    }
+  });
+
   server.on("/msg-board/api/admin/messages", HTTP_DELETE, [](AsyncWebServerRequest* request)
   {
     if (!isAdminAuthenticated(request))
@@ -1781,14 +1853,21 @@ void registerRoutes()
       return;
     }
     const uint32_t id = request->getParam("id")->value().toInt();
-    const bool deleted = messageBoard.remove(id);
-    if (deleted)
+    if (importUploadActive.load(std::memory_order_acquire) ||
+        importJobState.load(std::memory_order_acquire) == ImportJobState::Running)
     {
-      markBoardChanged(true);
+      request->send(409, "application/json", "{\"error\":\"import_in_progress\"}");
+      return;
     }
-    request->send(deleted ? 200 : 404,
-                  "application/json",
-            deleted ? "{\"deleted\":true}" : "{\"error\":\"message_not_found\"}");
+    MessageMutationJob job;
+    job.type = MessageMutationType::Delete;
+    job.id = id;
+    if (!startMessageMutation(job))
+    {
+      request->send(503, "application/json", "{\"error\":\"message_worker_unavailable\"}");
+      return;
+    }
+    request->send(202, "application/json", "{\"processing\":true}");
   });
 
   server.on("/msg-board/api/admin/message", HTTP_POST, [](AsyncWebServerRequest* request)
@@ -1832,16 +1911,24 @@ void registerRoutes()
       request->send(400, "application/json", "{\"error\":\"invalid_message\"}");
       return;
     }
-    const bool updated = messageBoard.update(id, name.c_str(), text.c_str(), priority);
-    if (updated)
+    if (importUploadActive.load(std::memory_order_acquire) ||
+        importJobState.load(std::memory_order_acquire) == ImportJobState::Running)
     {
-      markBoardChanged(true);
+      request->send(409, "application/json", "{\"error\":\"import_in_progress\"}");
+      return;
     }
-    request->send(updated ? 200 : 404,
-                  "application/json",
-            updated
-                      ? "{\"updated\":true}"
-                      : "{\"error\":\"message_not_found\"}");
+    MessageMutationJob job;
+    job.type = MessageMutationType::Update;
+    job.id = id;
+    job.priority = priority;
+    memcpy(job.name, name.c_str(), name.length() + 1);
+    memcpy(job.text, text.c_str(), text.length() + 1);
+    if (!startMessageMutation(job))
+    {
+      request->send(503, "application/json", "{\"error\":\"message_worker_unavailable\"}");
+      return;
+    }
+    request->send(202, "application/json", "{\"processing\":true}");
   });
 
   server.on("/msg-board/api/admin/format/prepare", HTTP_POST,
@@ -2459,11 +2546,6 @@ void loop()
   {
     const String ipAddress = WiFi.localIP().toString();
     Serial.printf("Connected to AREDN WLAN; IP: %s\n", ipAddress.c_str());
-    Serial.printf("AREDN Server: http://%s/\n", ipAddress.c_str());
-    Serial.printf("Message board: http://%s/msg-board\n", ipAddress.c_str());
-    Serial.printf("Camera page: http://%s/camera\n", ipAddress.c_str());
-    Serial.printf("Radio tools: http://%s/tools\n", ipAddress.c_str());
-    Serial.printf("Service status: http://%s/api/status\n", ipAddress.c_str());
     wasConnected = true;
   }
   else if (!connected && wasConnected)

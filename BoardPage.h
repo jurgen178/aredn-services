@@ -809,13 +809,13 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       });
     }
 
-    // The board finishes an import in the background; poll until it reports the outcome.
-    async function waitForImport() {
+    // Long-running board operations finish in a worker; poll until the result is available.
+    async function waitForJob(statusUrl) {
       let failures = 0;
       for (;;) {
         await new Promise((resolve) => window.setTimeout(resolve, 500));
         try {
-          const response = await fetch(`${API_BASE}/admin/import/status`, { cache: 'no-store' });
+          const response = await fetch(statusUrl, { cache: 'no-store' });
           if (response.status === 401) return { state: 'unauthorized' };
           if (!response.ok) throw new Error('Import status failed');
           const status = await response.json();
@@ -1188,6 +1188,17 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           setAdminState(false, 'Your admin session has expired.');
           return;
         }
+        if (response.status === 202) {
+          const outcome = await waitForJob(`${API_BASE}/admin/message/mutation/status`);
+          if (outcome.state === 'unauthorized') {
+            setAdminState(false, 'Your admin session has expired.');
+            return;
+          }
+          if (outcome.state !== 'done') {
+            setAdminError('The message could not be edited.');
+            return;
+          }
+        }
         if (!response.ok) {
           setAdminError('The message could not be edited.');
           return;
@@ -1220,6 +1231,17 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         if (response.status === 401) {
           setAdminState(false, 'Your admin session has expired.');
           return;
+        }
+        if (response.status === 202) {
+          const outcome = await waitForJob(`${API_BASE}/admin/message/mutation/status`);
+          if (outcome.state === 'unauthorized') {
+            setAdminState(false, 'Your admin session has expired.');
+            return;
+          }
+          if (outcome.state !== 'done') {
+            setAdminError('The message could not be deleted.');
+            return;
+          }
         }
         if (!response.ok) {
           setAdminError('The message could not be deleted.');
@@ -1554,7 +1576,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           return;
         }
         if (response.status === 202) {
-          const outcome = await waitForImport();
+          const outcome = await waitForJob(`${API_BASE}/admin/import/status`);
           if (outcome.state === 'unauthorized') {
             setAdminState(false, 'Your admin session has expired.');
             return;
