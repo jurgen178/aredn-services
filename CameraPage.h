@@ -188,6 +188,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     .camera-overlay {
       position: absolute;
       inset: 0;
+      z-index: 2;
       pointer-events: none;
     }
     .camera-overlay[hidden] { display: none; }
@@ -196,6 +197,41 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       inset: 38% 0 0;
       background: linear-gradient(180deg, transparent, rgb(9 19 20 / 82%));
       content: "";
+    }
+    .map-labels {
+      position: absolute;
+      inset: 0;
+      z-index: 3;
+      width: 100%;
+      height: 100%;
+      display: none;
+      pointer-events: none;
+    }
+    .map-labels.is-visible { display: block; }
+    .map-place-line {
+      stroke: var(--marker-color, #f0a24b);
+      stroke-width: 0.25;
+      opacity: 0.9;
+    }
+    .map-place-badge {
+      fill: rgb(9 19 20 / 82%);
+      stroke: rgb(255 255 255 / 30%);
+      stroke-width: 0.2;
+    }
+    .map-place-dot {
+      fill: var(--marker-color, #f0a24b);
+      stroke: #fff;
+      stroke-width: 0.35;
+    }
+    .map-place-text {
+      fill: var(--text-color, #fff);
+      stroke: rgb(8 18 19 / 90%);
+      stroke-width: 0.65;
+      stroke-linejoin: round;
+      paint-order: stroke;
+      font-family: "Segoe UI", sans-serif;
+      font-size: 2px;
+      font-weight: 700;
     }
     .overlay-badge {
       position: absolute;
@@ -286,6 +322,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         <div class="panel-actions">
           <p id="cameraStatus" class="status" role="status">Camera not configured</p>
           <button id="refreshButton" class="fullscreen-button" type="button">Get image now</button>
+          <button id="labelsButton" class="fullscreen-button" type="button" disabled>Hide labels</button>
           <button id="fullscreenButton" class="fullscreen-button" type="button">Fullscreen</button>
         </div>
       </div>
@@ -293,6 +330,15 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         <button id="fullscreenExitButton" class="fullscreen-button fullscreen-exit-button" type="button" hidden>Exit fullscreen</button>
         <div class="camera-content">
           <img id="cameraImage" class="camera-image" alt="Latest camera snapshot of Bellevue Downtown" hidden>
+          <svg id="mapLabels" class="map-labels" viewBox="0 0 100 75" preserveAspectRatio="none" role="img" aria-label="Landmark labels">
+            <!-- Point and label coordinates are percentages from the top-left; copy a group to add a place. -->
+            <g class="map-place" data-point-x="25" data-point-y="43" data-label-x="35" data-label-y="38" style="--marker-color: #f0a24b; --text-color: #fff;">
+              <line class="map-place-line"></line>
+              <rect class="map-place-badge" rx="1.2"></rect>
+              <circle class="map-place-dot" cx="25%" cy="43%" r="0.9"></circle>
+              <text class="map-place-text" x="35%" y="38%" text-anchor="middle" dominant-baseline="middle">Hospital</text>
+            </g>
+          </svg>
           <div id="cameraPlaceholder" class="camera-placeholder">
             <strong>Camera snapshot pending</strong>
             <span>Configure the Reolink camera through the device setup access point.</span>
@@ -314,7 +360,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         </div>
       </div>
       <p id="fullscreenStatus" class="fullscreen-status" role="status" hidden></p>
-      <p class="note">The ESP32 refreshes one shared camera snapshot every 30 seconds. The capture time comes from the controller clock and is shown in UTC.</p>
+      <p class="note">The ESP32 refreshes one shared camera snapshot every 30 seconds.</p>
     </section>
   </main>
   <script>
@@ -323,16 +369,19 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     const fullscreenExitButton = document.getElementById('fullscreenExitButton');
     const fullscreenStatus = document.getElementById('fullscreenStatus');
     const cameraImage = document.getElementById('cameraImage');
+    const mapLabels = document.getElementById('mapLabels');
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
     const cameraOverlay = document.getElementById('cameraOverlay');
     const cameraStatus = document.getElementById('cameraStatus');
     const refreshButton = document.getElementById('refreshButton');
+    const labelsButton = document.getElementById('labelsButton');
     const captureDate = document.getElementById('captureDate');
     const captureTime = document.getElementById('captureTime');
     let currentVersion = 0;
     let currentImageUrl = '';
     let imageRequestInProgress = false;
     let imageRequestToken = 0;
+    let labelsEnabled = true;
     const fullscreenSupported =
       document.fullscreenEnabled !== false &&
       typeof cameraFrame.requestFullscreen === 'function' &&
@@ -373,6 +422,62 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       return `Camera snapshot unavailable · ${status.error}`;
     }
 
+    function layoutMapLabels() {
+      const viewBox = mapLabels.viewBox.baseVal;
+      for (const place of mapLabels.querySelectorAll('.map-place')) {
+        const pointX = Number(place.dataset.pointX);
+        const pointY = Number(place.dataset.pointY);
+        const labelX = Number(place.dataset.labelX);
+        const labelY = Number(place.dataset.labelY);
+        const line = place.querySelector('.map-place-line');
+        const marker = place.querySelector('.map-place-dot');
+        const badge = place.querySelector('.map-place-badge');
+        const label = place.querySelector('.map-place-text');
+        const pointSvgX = viewBox.x + viewBox.width * pointX / 100;
+        const pointSvgY = viewBox.y + viewBox.height * pointY / 100;
+
+        marker.setAttribute('cx', `${pointX}%`);
+        marker.setAttribute('cy', `${pointY}%`);
+        label.setAttribute('x', `${labelX}%`);
+        label.setAttribute('y', `${labelY}%`);
+        line.setAttribute('x1', pointSvgX);
+        line.setAttribute('y1', pointSvgY);
+
+        const bounds = label.getBBox();
+        const paddingX = 0.6;
+        const paddingY = 0.4;
+        badge.setAttribute('x', bounds.x - paddingX);
+        badge.setAttribute('y', bounds.y - paddingY);
+        badge.setAttribute('width', bounds.width + paddingX * 2);
+        badge.setAttribute('height', bounds.height + paddingY * 2);
+
+        const left = bounds.x - paddingX;
+        const right = bounds.x + bounds.width + paddingX;
+        const top = bounds.y - paddingY;
+        const bottom = bounds.y + bounds.height + paddingY;
+        const edgeCenters = [
+          { x: left, y: (top + bottom) / 2 },
+          { x: right, y: (top + bottom) / 2 },
+          { x: (left + right) / 2, y: top },
+          { x: (left + right) / 2, y: bottom }
+        ];
+        const nearestEdge = edgeCenters.reduce((nearest, candidate) =>
+          Math.hypot(candidate.x - pointSvgX, candidate.y - pointSvgY) <
+                  Math.hypot(nearest.x - pointSvgX, nearest.y - pointSvgY)
+              ? candidate
+              : nearest);
+        line.setAttribute('x2', nearestEdge.x);
+        line.setAttribute('y2', nearestEdge.y);
+      }
+    }
+
+    function updateLabelsButton() {
+      labelsButton.textContent = labelsEnabled ? 'Hide labels' : 'Show labels';
+      labelsButton.disabled = !currentImageUrl;
+      mapLabels.classList.toggle('is-visible', Boolean(currentImageUrl) && labelsEnabled);
+      if (currentImageUrl && labelsEnabled) layoutMapLabels();
+    }
+
     async function loadSnapshot(version, captureEpoch) {
       if (imageRequestInProgress || version <= currentVersion) return;
       imageRequestInProgress = true;
@@ -399,6 +504,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         cameraImage.hidden = false;
         cameraPlaceholder.hidden = true;
         cameraOverlay.hidden = false;
+        updateLabelsButton();
         const capturedAt = captureEpoch > 0 ? new Date(captureEpoch * 1000) : null;
         captureDate.textContent = capturedAt
           ? new Intl.DateTimeFormat('en-GB', {
@@ -441,6 +547,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           cameraOverlay.hidden = true;
           if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
           currentImageUrl = '';
+          updateLabelsButton();
           currentVersion = status.version;
           return status;
         }
@@ -502,6 +609,10 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     refreshButton.addEventListener('click', requestCameraSnapshot);
     fullscreenButton.addEventListener('click', toggleFullscreen);
     fullscreenExitButton.addEventListener('click', toggleFullscreen);
+    labelsButton.addEventListener('click', () => {
+      labelsEnabled = !labelsEnabled;
+      updateLabelsButton();
+    });
 
     document.addEventListener('fullscreenchange', updateFullscreenButton);
     document.addEventListener('visibilitychange', () => {
