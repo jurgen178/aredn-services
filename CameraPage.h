@@ -382,6 +382,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     let imageRequestInProgress = false;
     let imageRequestToken = 0;
     let labelsEnabled = true;
+    let latestCameraStatus = null;
+    let imageDisplayedAt = null;
+    let lastRenderedCameraStatus = '';
     const fullscreenSupported =
       document.fullscreenEnabled !== false &&
       typeof cameraFrame.requestFullscreen === 'function' &&
@@ -409,17 +412,42 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       fullscreenExitButton.setAttribute('aria-label', 'Exit camera fullscreen');
     }
 
-    function describeCameraStatus(status) {
+    function describeCameraStatus(status, displayedSeconds = 0) {
       if (status.image_available) {
-        if (status.state === 'stale') return `Showing the last snapshot · ${status.age_seconds}s old · ${status.error}`;
-        if (status.state === 'updating') return `Updating snapshot · last image ${status.age_seconds}s old`;
-        return `Snapshot updated ${status.age_seconds}s ago`;
+        if (status.state === 'stale') return `Snapshot refresh failed · last updated ${displayedSeconds}s ago · ${status.error}`;
+        if (status.state === 'updating') return `Updating snapshot · last updated ${displayedSeconds}s ago`;
+        return `Updated ${displayedSeconds}s ago · auto-refresh every ${status.refresh_seconds}s`;
       }
       if (status.state === 'not_configured') return 'Camera not configured';
       if (status.state === 'waiting_for_network') return 'Waiting for the server network connection';
       if (status.state === 'storage_error') return 'Camera configuration storage is unavailable';
       if (status.state === 'updating') return 'Connecting to the camera...';
       return `Camera snapshot unavailable · ${status.error}`;
+    }
+
+    function renderCameraStatus(status, resetImageAge = false) {
+      latestCameraStatus = status;
+      if (status.image_available && (resetImageAge || imageDisplayedAt === null)) {
+        imageDisplayedAt = performance.now();
+      }
+      const displayedSeconds = status.image_available
+        ? Math.floor((performance.now() - imageDisplayedAt) / 1000)
+        : 0;
+      lastRenderedCameraStatus =
+        describeCameraStatus(status, displayedSeconds);
+      cameraStatus.textContent = lastRenderedCameraStatus;
+    }
+
+    function updateCameraStatusAge() {
+      if (
+        document.hidden ||
+        !latestCameraStatus ||
+        !latestCameraStatus.image_available ||
+        cameraStatus.textContent !== lastRenderedCameraStatus
+      ) {
+        return;
+      }
+      renderCameraStatus(latestCameraStatus);
     }
 
     function layoutMapLabels() {
@@ -538,7 +566,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         const response = await fetch('/camera/api/status', { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const status = await response.json();
-        cameraStatus.textContent = describeCameraStatus(status);
+        renderCameraStatus(status);
         if (!status.image_available) {
           ++imageRequestToken;
           imageRequestInProgress = false;
@@ -547,12 +575,16 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           cameraOverlay.hidden = true;
           if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
           currentImageUrl = '';
+          imageDisplayedAt = null;
           updateLabelsButton();
           currentVersion = status.version;
           return status;
         }
         if (status.version !== currentVersion) {
           await loadSnapshot(status.version, status.capture_epoch);
+          if (currentVersion === status.version) {
+            renderCameraStatus(status, true);
+          }
         }
         return status;
       } catch (error) {
@@ -629,6 +661,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     synchronizeDeviceTime();
     refreshCameraStatus();
     window.setInterval(refreshCameraStatus, 15000);
+    window.setInterval(updateCameraStatusAge, 1000);
   </script>
 </body>
 </html>

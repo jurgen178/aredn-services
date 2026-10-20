@@ -423,7 +423,7 @@ void drawBoardDisplay()
                static_cast<unsigned long>(reolinkCamera.imageAgeSeconds()));
       drawDisplayLine(2, "Snapshot: ", age);
     }
-    drawDisplayLine(3, "Size: ", "640 x 480");
+    drawDisplayLine(3, "Size: ", "2560 x 1920");
     drawDisplayLine(4, "Refresh: ", "30 seconds");
     drawDisplayLine(5, "", "Bellevue Downtown");
     drawDisplayLine(6, "Overlay: ", "Browser only");
