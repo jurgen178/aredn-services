@@ -244,6 +244,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         <h2 id="previewTitle">Camera preview</h2>
         <div class="panel-actions">
           <p id="cameraStatus" class="status" role="status">Camera not configured</p>
+          <button id="refreshButton" class="fullscreen-button" type="button">Get image now</button>
           <button id="fullscreenButton" class="fullscreen-button" type="button">Fullscreen</button>
         </div>
       </div>
@@ -275,6 +276,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     const cameraImage = document.getElementById('cameraImage');
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
     const cameraStatus = document.getElementById('cameraStatus');
+    const refreshButton = document.getElementById('refreshButton');
     let currentVersion = 0;
     let currentImageUrl = '';
     let imageRequestInProgress = false;
@@ -306,84 +308,114 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       fullscreenExitButton.setAttribute('aria-label', 'Exit camera fullscreen');
     }
 
+    function describeCameraStatus(status) {
+      if (status.image_available) {
+        if (status.state === 'stale') return `Showing the last snapshot · ${status.age_seconds}s old · ${status.error}`;
+        if (status.state === 'updating') return `Updating snapshot · last image ${status.age_seconds}s old`;
+        return `Snapshot updated ${status.age_seconds}s ago`;
+      }
+      if (status.state === 'not_configured') return 'Camera not configured';
+      if (status.state === 'waiting_for_network') return 'Waiting for the server network connection';
+      if (status.state === 'storage_error') return 'Camera configuration storage is unavailable';
+      if (status.state === 'updating') return 'Connecting to the camera...';
+      return `Camera snapshot unavailable · ${status.error}`;
+    }
+
+    async function loadSnapshot(version) {
+      if (imageRequestInProgress || version <= currentVersion) return;
+      imageRequestInProgress = true;
+      const requestToken = ++imageRequestToken;
+      let nextImageUrl = '';
+      try {
+        const response = await fetch(`/camera/image.jpg?v=${version}`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const imageBlob = await response.blob();
+        if (imageBlob.type && imageBlob.type !== 'image/jpeg') {
+          throw new Error('The server did not return a JPEG image.');
+        }
+        if (requestToken !== imageRequestToken) return;
+
+        nextImageUrl = URL.createObjectURL(imageBlob);
+        const previousImageUrl = currentImageUrl;
+        await new Promise((resolve, reject) => {
+          cameraImage.onload = resolve;
+          cameraImage.onerror = () => reject(new Error('The snapshot is not a valid image.'));
+          cameraImage.src = nextImageUrl;
+        });
+        currentImageUrl = nextImageUrl;
+        currentVersion = version;
+        cameraImage.hidden = false;
+        cameraPlaceholder.hidden = true;
+        if (previousImageUrl) URL.revokeObjectURL(previousImageUrl);
+      } catch (error) {
+        if (nextImageUrl) URL.revokeObjectURL(nextImageUrl);
+        if (requestToken === imageRequestToken && !currentImageUrl) {
+          cameraStatus.textContent = `Could not load camera snapshot: ${error.message}`;
+        }
+      } finally {
+        imageRequestInProgress = false;
+      }
+    }
+
+    async function refreshCameraStatus() {
+      if (document.hidden) return null;
+      try {
+        const response = await fetch('/camera/api/status', { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const status = await response.json();
+        cameraStatus.textContent = describeCameraStatus(status);
+        if (!status.image_available) {
+          ++imageRequestToken;
+          imageRequestInProgress = false;
+          cameraImage.hidden = true;
+          cameraPlaceholder.hidden = false;
+          if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
+          currentImageUrl = '';
+          currentVersion = status.version;
+          return status;
+        }
+        if (status.version !== currentVersion) {
+          await loadSnapshot(status.version);
+        }
+        return status;
+      } catch (error) {
+        cameraStatus.textContent = `Could not read camera status: ${error.message}`;
+        return null;
+      }
+    }
+
+    async function requestCameraSnapshot() {
+      refreshButton.disabled = true;
+      cameraStatus.textContent = 'Requesting a fresh snapshot...';
+      try {
+        const response = await fetch('/camera/api/snapshot', { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+          const status = await refreshCameraStatus();
+          if (status && status.state !== 'updating') {
+            if (!status.image_available) {
+              throw new Error(`Snapshot unavailable: ${status.error}`);
+            }
+            return;
+          }
+          await new Promise(resolve => window.setTimeout(resolve, 1000));
+        }
+        throw new Error('Timed out waiting for the camera snapshot.');
+      } catch (error) {
+        cameraStatus.textContent = `Could not get a fresh camera snapshot: ${error.message}`;
+      } finally {
+        refreshButton.disabled = false;
+      }
+    }
+
     async function toggleFullscreen() {
       if (!fullscreenSupported) {
         return;
       }
 
-      function describeCameraStatus(status) {
-        if (status.image_available) {
-          if (status.state === 'stale') return `Showing the last snapshot · ${status.age_seconds}s old · ${status.error}`;
-          if (status.state === 'updating') return `Updating snapshot · last image ${status.age_seconds}s old`;
-          return `Snapshot updated ${status.age_seconds}s ago`;
-        }
-        if (status.state === 'not_configured') return 'Camera not configured';
-        if (status.state === 'waiting_for_network') return 'Waiting for the server network connection';
-        if (status.state === 'storage_error') return 'Camera configuration storage is unavailable';
-        if (status.state === 'updating') return 'Connecting to the camera...';
-        return `Camera snapshot unavailable · ${status.error}`;
-      }
-
-      async function loadSnapshot(version) {
-        if (imageRequestInProgress || version <= currentVersion) return;
-        imageRequestInProgress = true;
-        const requestToken = ++imageRequestToken;
-        let nextImageUrl = '';
-        try {
-          const response = await fetch(`/camera/image.jpg?v=${version}`, { cache: 'no-store' });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const imageBlob = await response.blob();
-          if (imageBlob.type && imageBlob.type !== 'image/jpeg') {
-            throw new Error('The server did not return a JPEG image.');
-          }
-          if (requestToken !== imageRequestToken) return;
-
-          nextImageUrl = URL.createObjectURL(imageBlob);
-          const previousImageUrl = currentImageUrl;
-          await new Promise((resolve, reject) => {
-            cameraImage.onload = resolve;
-            cameraImage.onerror = () => reject(new Error('The snapshot is not a valid image.'));
-            cameraImage.src = nextImageUrl;
-          });
-          currentImageUrl = nextImageUrl;
-          currentVersion = version;
-          cameraImage.hidden = false;
-          cameraPlaceholder.hidden = true;
-          if (previousImageUrl) URL.revokeObjectURL(previousImageUrl);
-        } catch (error) {
-          if (nextImageUrl) URL.revokeObjectURL(nextImageUrl);
-          if (requestToken === imageRequestToken && !currentImageUrl) {
-            cameraStatus.textContent = `Could not load camera snapshot: ${error.message}`;
-          }
-        } finally {
-          imageRequestInProgress = false;
-        }
-      }
-
-      async function refreshCameraStatus() {
-        if (document.hidden) return;
-        try {
-          const response = await fetch('/camera/api/status', { cache: 'no-store' });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const status = await response.json();
-          cameraStatus.textContent = describeCameraStatus(status);
-          if (!status.image_available) {
-            ++imageRequestToken;
-            imageRequestInProgress = false;
-            cameraImage.hidden = true;
-            cameraPlaceholder.hidden = false;
-            if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
-            currentImageUrl = '';
-            currentVersion = status.version;
-            return;
-          }
-          if (status.version !== currentVersion) {
-            await loadSnapshot(status.version);
-          }
-        } catch (error) {
-          cameraStatus.textContent = `Could not read camera status: ${error.message}`;
-        }
-      }
       fullscreenStatus.hidden = true;
       try {
         if (document.fullscreenElement === cameraFrame) {
@@ -397,6 +429,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       }
     }
 
+    refreshButton.addEventListener('click', requestCameraSnapshot);
     fullscreenButton.addEventListener('click', toggleFullscreen);
     fullscreenExitButton.addEventListener('click', toggleFullscreen);
 

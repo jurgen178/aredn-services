@@ -19,6 +19,8 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
     p { line-height: 1.5; }
     label { display: block; margin: 16px 0 6px; font-weight: 700; }
     input { box-sizing: border-box; width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid #aebdb3; border-radius: 5px; font: inherit; }
+    .password-visibility { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; font-weight: 400; }
+    .password-visibility input { width: auto; min-height: auto; margin: 0; }
     button { min-height: 44px; margin: 18px 8px 0 0; padding: 0 16px; border: 0; border-radius: 5px; color: #fff; background: #173b33; font: inherit; font-weight: 700; cursor: pointer; }
     button.secondary { color: #173b33; background: #e4eee8; }
     button:disabled { cursor: wait; opacity: 0.65; }
@@ -68,6 +70,10 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
       <input id="username" name="username" maxlength="32" autocomplete="username" placeholder="admin or a dedicated viewer account" required>
       <label for="password">Reolink password</label>
       <input id="password" name="password" type="password" maxlength="64" autocomplete="new-password">
+      <label class="password-visibility" for="show-password">
+        <input id="show-password" type="checkbox">
+        <span>Show password</span>
+      </label>
       <p class="hint">On later saves, leave the password blank to keep the saved password.</p>
       <button id="save" type="submit">Save camera settings</button>
       <button id="clear" class="secondary" type="button">Clear saved settings</button>
@@ -81,11 +87,17 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
     const saveButton = document.getElementById('save');
     const clearButton = document.getElementById('clear');
     const cameraState = document.getElementById('camera-state');
+    const passwordInput = document.getElementById('password');
+    const showPassword = document.getElementById('show-password');
 
     function showStatus(message, isError = false) {
       statusElement.textContent = message;
       statusElement.classList.toggle('error', isError);
     }
+
+    showPassword.addEventListener('change', () => {
+      passwordInput.type = showPassword.checked ? 'text' : 'password';
+    });
 
     async function loadSettings() {
       try {

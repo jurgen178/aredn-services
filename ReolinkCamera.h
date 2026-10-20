@@ -164,6 +164,37 @@ public:
     request->send(200, "application/json; charset=utf-8", response);
   }
 
+  void requestSnapshot(AsyncWebServerRequest* request)
+  {
+    if (!preferencesReady_ || taskHandle_ == nullptr || configMutex_ == nullptr)
+    {
+      request->send(503, "application/json",
+                    "{\"error\":\"camera_service_unavailable\"}");
+      return;
+    }
+    if (xSemaphoreTake(configMutex_, pdMS_TO_TICKS(100)) != pdTRUE)
+    {
+      request->send(503, "application/json",
+                    "{\"error\":\"camera_config_busy\"}");
+      return;
+    }
+    const bool configured = configured_;
+    xSemaphoreGive(configMutex_);
+    if (!configured)
+    {
+      request->send(409, "application/json",
+                    "{\"error\":\"camera_not_configured\"}");
+      return;
+    }
+
+    if (state_.load(std::memory_order_acquire) != State::Connecting)
+    {
+      state_.store(State::Connecting, std::memory_order_release);
+      notifyTask();
+    }
+    request->send(202, "application/json", "{\"accepted\":true}");
+  }
+
   void handleConfiguration(AsyncWebServerRequest* request) const
   {
     if (!preferencesReady_ || configMutex_ == nullptr ||

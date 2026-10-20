@@ -1626,6 +1626,11 @@ void registerRoutes()
     reolinkCamera.handleStatus(request);
   });
 
+  server.on("/camera/api/snapshot", HTTP_POST, [](AsyncWebServerRequest* request)
+  {
+    reolinkCamera.requestSnapshot(request);
+  });
+
   server.on("/api/camera/config", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     if (!isSetupApClient(request))
