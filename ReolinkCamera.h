@@ -12,6 +12,7 @@
 #include <new>
 #include <cstring>
 #include <cstdlib>
+#include <time.h>
 
 class ReolinkCamera
 {
@@ -20,6 +21,7 @@ public:
   static constexpr uint16_t SNAPSHOT_WIDTH = 640;
   static constexpr uint16_t SNAPSHOT_HEIGHT = 480;
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
+  static constexpr uint32_t MIN_VALID_CAPTURE_EPOCH = 1577836800UL;
 
   bool begin()
   {
@@ -148,19 +150,28 @@ public:
     const uint32_t ageSeconds = available
         ? (millis() - lastSuccess) / 1000
         : 0;
+    const time_t estimatedCaptureEpoch =
+        time(nullptr) - static_cast<time_t>(ageSeconds);
+    const uint32_t captureEpoch =
+        available &&
+                estimatedCaptureEpoch >= static_cast<time_t>(MIN_VALID_CAPTURE_EPOCH)
+            ? static_cast<uint32_t>(estimatedCaptureEpoch)
+            : 0;
 
-    char response[224];
+    char response[256];
     snprintf(response, sizeof(response),
              "{\"state\":\"%s\",\"error\":\"%s\",\"http_status\":%d,"
              "\"image_available\":%s,\"version\":%lu,"
-             "\"age_seconds\":%lu,\"refresh_seconds\":%lu}",
+             "\"age_seconds\":%lu,\"refresh_seconds\":%lu,"
+             "\"capture_epoch\":%lu}",
              stateName(currentState, available),
              errorName(currentError),
              static_cast<int>(httpStatus),
              available ? "true" : "false",
              static_cast<unsigned long>(version_.load(std::memory_order_acquire)),
              static_cast<unsigned long>(ageSeconds),
-             static_cast<unsigned long>(SNAPSHOT_INTERVAL_MS / 1000));
+             static_cast<unsigned long>(SNAPSHOT_INTERVAL_MS / 1000),
+             static_cast<unsigned long>(captureEpoch));
     request->send(200, "application/json; charset=utf-8", response);
   }
 

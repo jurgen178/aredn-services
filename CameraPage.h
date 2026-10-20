@@ -106,10 +106,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       height: 100%;
       aspect-ratio: 4 / 3;
       background-color: #192b2a;
-      background-image:
-        linear-gradient(rgb(255 255 255 / 5%) 1px, transparent 1px),
-        linear-gradient(90deg, rgb(255 255 255 / 5%) 1px, transparent 1px);
-      background-size: 32px 32px;
     }
     .camera-frame:fullscreen {
       width: 100vw;
@@ -178,6 +174,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       text-align: center;
       pointer-events: none;
     }
+    .camera-placeholder[hidden] { display: none; }
     .camera-placeholder strong {
       font-size: clamp(1rem, 4vw, 1.4rem);
       letter-spacing: 0.06em;
@@ -188,31 +185,75 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       color: #b7c9bf;
       font-size: clamp(0.78rem, 2.5vw, 0.95rem);
     }
-    .overlay {
+    .camera-overlay {
       position: absolute;
       inset: 0;
-      width: 100%;
-      height: 100%;
       pointer-events: none;
     }
-    .overlay line {
-      fill: none;
-      stroke: #f0a24b;
-      stroke-width: 0.5;
-      vector-effect: non-scaling-stroke;
-    }
-    .overlay-label {
+    .camera-overlay[hidden] { display: none; }
+    .camera-overlay::after {
       position: absolute;
-      left: var(--x);
-      top: var(--y);
-      padding: 3px 6px;
-      color: #fff3dd;
-      font-size: clamp(0.68rem, 1.5vw, 0.85rem);
+      inset: 38% 0 0;
+      background: linear-gradient(180deg, transparent, rgb(9 19 20 / 82%));
+      content: "";
+    }
+    .overlay-badge {
+      position: absolute;
+      z-index: 1;
+      top: clamp(12px, 2.5vw, 24px);
+      left: clamp(12px, 2.5vw, 24px);
+      padding: 7px 11px;
+      color: #f6f7f2;
+      font-size: clamp(0.62rem, 1.4vw, 0.76rem);
       font-weight: 700;
-      white-space: nowrap;
-      background: rgb(23 39 34 / 78%);
-      border-left: 2px solid #f0a24b;
-      pointer-events: none;
+      letter-spacing: 0.1em;
+      background: rgb(12 27 27 / 68%);
+      border: 1px solid rgb(255 255 255 / 24%);
+      border-radius: 999px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    .overlay-bottom {
+      position: absolute;
+      z-index: 1;
+      right: clamp(14px, 3vw, 28px);
+      bottom: clamp(14px, 3vw, 28px);
+      left: clamp(14px, 3vw, 28px);
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      color: #fff;
+    }
+    .overlay-location, .overlay-capture {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+      text-shadow: 0 1px 8px rgb(0 0 0 / 40%);
+    }
+    .overlay-kicker {
+      color: #c8d9ce;
+      font-size: clamp(0.58rem, 1.3vw, 0.7rem);
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .overlay-location strong {
+      font-size: clamp(1rem, 2.7vw, 1.5rem);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .overlay-capture { justify-items: end; text-align: right; }
+    .overlay-capture time { white-space: nowrap; }
+    #captureDate {
+      color: #d8e3dc;
+      font-size: clamp(0.72rem, 1.6vw, 0.88rem);
+    }
+    #captureTime {
+      font-size: clamp(1rem, 2.7vw, 1.5rem);
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+      letter-spacing: 0.02em;
     }
     .note {
       margin: 16px 0 0;
@@ -256,16 +297,24 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
             <strong>Camera snapshot pending</strong>
             <span>Configure the Reolink camera through the device setup access point.</span>
           </div>
-          <svg class="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-            <line x1="10%" y1="30%" x2="90%" y2="30%"></line>
-            <line x1="10%" y1="70%" x2="90%" y2="80%"></line>
-          </svg>
-          <span class="overlay-label" style="--x: 10%; --y: 32%;">TEXT 1</span>
-          <span class="overlay-label" style="--x: 60%; --y: 62%;">TEXT 2</span>
+          <div id="cameraOverlay" class="camera-overlay" hidden aria-label="Snapshot information">
+            <span class="overlay-badge">AREDN CAMERA</span>
+            <div class="overlay-bottom">
+              <div class="overlay-location">
+                <span class="overlay-kicker">Camera view</span>
+                <strong>Bellevue Downtown</strong>
+              </div>
+              <div class="overlay-capture">
+                <span class="overlay-kicker">Captured · UTC</span>
+                <time id="captureDate"></time>
+                <time id="captureTime"></time>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <p id="fullscreenStatus" class="fullscreen-status" role="status" hidden></p>
-      <p class="note">The ESP32 refreshes one shared camera snapshot every 30 seconds. Each viewer receives that cached image; the lines and labels are drawn separately in the browser.</p>
+      <p class="note">The ESP32 refreshes one shared camera snapshot every 30 seconds. The capture time comes from the controller clock and is shown in UTC.</p>
     </section>
   </main>
   <script>
@@ -275,8 +324,11 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     const fullscreenStatus = document.getElementById('fullscreenStatus');
     const cameraImage = document.getElementById('cameraImage');
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
+    const cameraOverlay = document.getElementById('cameraOverlay');
     const cameraStatus = document.getElementById('cameraStatus');
     const refreshButton = document.getElementById('refreshButton');
+    const captureDate = document.getElementById('captureDate');
+    const captureTime = document.getElementById('captureTime');
     let currentVersion = 0;
     let currentImageUrl = '';
     let imageRequestInProgress = false;
@@ -321,7 +373,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       return `Camera snapshot unavailable · ${status.error}`;
     }
 
-    async function loadSnapshot(version) {
+    async function loadSnapshot(version, captureEpoch) {
       if (imageRequestInProgress || version <= currentVersion) return;
       imageRequestInProgress = true;
       const requestToken = ++imageRequestToken;
@@ -346,6 +398,23 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         currentVersion = version;
         cameraImage.hidden = false;
         cameraPlaceholder.hidden = true;
+        cameraOverlay.hidden = false;
+        const capturedAt = captureEpoch > 0 ? new Date(captureEpoch * 1000) : null;
+        captureDate.textContent = capturedAt
+          ? new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'UTC',
+            dateStyle: 'medium'
+          }).format(capturedAt)
+          : 'Controller time unavailable';
+        captureTime.textContent = capturedAt
+          ? new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'UTC',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hourCycle: 'h23'
+          }).format(capturedAt)
+          : '--:--:--';
         if (previousImageUrl) URL.revokeObjectURL(previousImageUrl);
       } catch (error) {
         if (nextImageUrl) URL.revokeObjectURL(nextImageUrl);
@@ -369,13 +438,14 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           imageRequestInProgress = false;
           cameraImage.hidden = true;
           cameraPlaceholder.hidden = false;
+          cameraOverlay.hidden = true;
           if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
           currentImageUrl = '';
           currentVersion = status.version;
           return status;
         }
         if (status.version !== currentVersion) {
-          await loadSnapshot(status.version);
+          await loadSnapshot(status.version, status.capture_epoch);
         }
         return status;
       } catch (error) {
