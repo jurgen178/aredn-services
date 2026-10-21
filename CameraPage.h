@@ -206,6 +206,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       width: 100%;
       height: 100%;
       display: none;
+      font-size: clamp(0.72rem, 1.6vw, 0.88rem);
       pointer-events: none;
     }
     .map-labels.is-visible { display: block; }
@@ -311,7 +312,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       <div>
         <p class="header-label"><a class="header-label-link" href="/" title="Open the AREDN services portal">AREDN · Bellevue Downtown View</a></p>
         <h1>Camera Snapshot</h1>
-        <p class="intro">A still image from Bellevue Downtown, refreshed about every 30 seconds.</p>
+        <p class="intro">A camera view of Bellevue Downtown.</p>
         <p class="experimental-note">EXPERIMENTAL ESP32 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
       </div>
     </div>
@@ -474,6 +475,11 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
 
     function layoutMapLabels() {
       const viewBox = mapLabels.viewBox.baseVal;
+      const mapWidth = mapLabels.getBoundingClientRect().width;
+      if (!mapWidth) return;
+      const screenFontSize = Number.parseFloat(getComputedStyle(mapLabels).fontSize);
+      const fontSize = screenFontSize * viewBox.width / mapWidth;
+      const targetSizeScale = fontSize / 2;
       const toSvgX = sourceX =>
         viewBox.x + viewBox.width * (sourceX - cameraCrop.left) / cameraCrop.width;
       const toSvgY = sourceY =>
@@ -492,16 +498,33 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         const labelSvgX = toSvgX(labelX);
         const labelSvgY = toSvgY(labelY);
 
-        marker.setAttribute('cx', pointSvgX);
-        marker.setAttribute('cy', pointSvgY);
+        label.style.fontSize = `${fontSize}px`;
         label.setAttribute('x', labelSvgX);
         label.setAttribute('y', labelSvgY);
+        const availableWidth = 2 * Math.min(
+          labelSvgX - viewBox.x,
+          viewBox.x + viewBox.width - labelSvgX
+        );
+        const textWidth = Math.max(label.getComputedTextLength(), label.getBBox().width);
+        const sizeScale = Math.min(
+          targetSizeScale,
+          Math.max(0, availableWidth) / (textWidth / targetSizeScale + 1.65)
+        );
+        label.style.fontSize = `${2 * sizeScale}px`;
+        label.style.strokeWidth = `${0.65 * sizeScale}px`;
+        line.style.strokeWidth = `${0.25 * sizeScale}px`;
+        marker.style.strokeWidth = `${0.35 * sizeScale}px`;
+        marker.setAttribute('r', 0.9 * sizeScale);
+        badge.style.strokeWidth = `${0.2 * sizeScale}px`;
+        badge.setAttribute('rx', 1.2 * sizeScale);
+        marker.setAttribute('cx', pointSvgX);
+        marker.setAttribute('cy', pointSvgY);
         line.setAttribute('x1', pointSvgX);
         line.setAttribute('y1', pointSvgY);
 
         const bounds = label.getBBox();
-        const paddingX = 0.4;
-        const paddingY = 0.25;
+        const paddingX = 0.4 * sizeScale;
+        const paddingY = 0.25 * sizeScale;
         badge.setAttribute('x', bounds.x - paddingX);
         badge.setAttribute('y', bounds.y - paddingY);
         badge.setAttribute('width', bounds.width + paddingX * 2);
@@ -713,6 +736,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     });
 
     document.addEventListener('fullscreenchange', updateFullscreenButton);
+    window.addEventListener('resize', () => {
+      if (currentImageUrl && labelsEnabled) layoutMapLabels();
+    });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) refreshCameraStatus();
     });
