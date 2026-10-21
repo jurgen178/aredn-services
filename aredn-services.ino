@@ -423,7 +423,20 @@ void drawBoardDisplay()
                static_cast<unsigned long>(reolinkCamera.imageAgeSeconds()));
       drawDisplayLine(2, "Snapshot: ", age);
     }
-    drawDisplayLine(3, "Size: ", "2560 x 1920");
+    uint16_t imageWidth = 0;
+    uint16_t imageHeight = 0;
+    char imageDimensions[20] = "None yet";
+    if (reolinkCamera.imageDimensions(imageWidth, imageHeight))
+    {
+      snprintf(imageDimensions, sizeof(imageDimensions), "%u x %u",
+               static_cast<unsigned>(imageWidth),
+               static_cast<unsigned>(imageHeight));
+    }
+    else if (reolinkCamera.imageAvailable())
+    {
+      strlcpy(imageDimensions, "Unknown", sizeof(imageDimensions));
+    }
+    drawDisplayLine(3, "Size: ", imageDimensions);
     drawDisplayLine(4, "Refresh: ", "30 seconds");
     drawDisplayLine(5, "", "Bellevue Downtown");
     drawDisplayLine(6, "Overlay: ", "Browser only");

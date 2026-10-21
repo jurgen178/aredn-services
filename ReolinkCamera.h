@@ -18,8 +18,6 @@ class ReolinkCamera
 {
 public:
   static constexpr uint32_t SNAPSHOT_INTERVAL_MS = 30000;
-  static constexpr uint16_t SNAPSHOT_WIDTH = 640;
-  static constexpr uint16_t SNAPSHOT_HEIGHT = 480;
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
   static constexpr uint32_t MIN_VALID_CAPTURE_EPOCH = 1577836800UL;
 
@@ -378,6 +376,14 @@ public:
     return imageAvailable_.load(std::memory_order_acquire);
   }
 
+  bool imageDimensions(uint16_t& width, uint16_t& height) const
+  {
+    const uint32_t dimensions = imageDimensions_.load(std::memory_order_acquire);
+    width = static_cast<uint16_t>(dimensions >> 16);
+    height = static_cast<uint16_t>(dimensions & 0xFFFF);
+    return width != 0 && height != 0;
+  }
+
 private:
   struct CameraSettings
   {
@@ -483,6 +489,7 @@ private:
   std::atomic<bool> imageAvailable_{false};
   std::atomic<uint32_t> version_{0};
   std::atomic<uint32_t> lastSuccessMs_{0};
+  std::atomic<uint32_t> imageDimensions_{0};
 
   static void taskEntry(void* context)
   {
@@ -568,6 +575,10 @@ private:
       fail(error);
       return;
     }
+    uint16_t imageWidth = 0;
+    uint16_t imageHeight = 0;
+    const bool dimensionsAvailable =
+        readJpegDimensions(target, imageSize, imageWidth, imageHeight);
 
     if (xSemaphoreTake(snapshotMutex_, portMAX_DELAY) != pdTRUE)
     {
@@ -581,6 +592,10 @@ private:
     }
     buffers_[targetIndex].size = imageSize;
     activeBuffer_ = static_cast<int8_t>(targetIndex);
+    const uint32_t dimensions = dimensionsAvailable
+        ? (static_cast<uint32_t>(imageWidth) << 16) | imageHeight
+        : 0;
+    imageDimensions_.store(dimensions, std::memory_order_release);
     lastSuccessMs_.store(millis(), std::memory_order_release);
     version_.fetch_add(1, std::memory_order_acq_rel);
     imageAvailable_.store(true, std::memory_order_release);
@@ -667,14 +682,12 @@ private:
     const int urlLength = snprintf(
         url, sizeof(url),
         "http://%s:%u/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=%08lx"
-        "&user=%s&password=%s&width=%u&height=%u",
+        "&user=%s&password=%s",
         settings.host,
         settings.port,
         static_cast<unsigned long>(requestNonce),
         encodedUsername,
-        encodedPassword,
-        SNAPSHOT_WIDTH,
-        SNAPSHOT_HEIGHT);
+        encodedPassword);
     if (urlLength <= 0 || static_cast<size_t>(urlLength) >= sizeof(url))
     {
       error = SnapshotError::UrlTooLong;
@@ -750,6 +763,7 @@ private:
     activeBuffer_ = -1;
     buffers_[0].size = 0;
     buffers_[1].size = 0;
+    imageDimensions_.store(0, std::memory_order_release);
     imageAvailable_.store(false, std::memory_order_release);
     version_.fetch_add(1, std::memory_order_acq_rel);
     lastSuccessMs_.store(0, std::memory_order_release);
@@ -900,5 +914,82 @@ private:
       case SnapshotError::InvalidJpeg: return "invalid_snapshot";
     }
     return "camera_request_failed";
+  }
+
+  static bool isJpegStartOfFrameMarker(uint8_t marker)
+  {
+    return (marker >= 0xC0 && marker <= 0xC3) ||
+           (marker >= 0xC5 && marker <= 0xC7) ||
+           (marker >= 0xC9 && marker <= 0xCB) ||
+           (marker >= 0xCD && marker <= 0xCF);
+  }
+
+  static bool readJpegDimensions(const uint8_t* jpeg,
+                                 size_t imageSize,
+                                 uint16_t& width,
+                                 uint16_t& height)
+  {
+    width = 0;
+    height = 0;
+    if (jpeg == nullptr || imageSize < 4 ||
+        jpeg[0] != 0xFF || jpeg[1] != 0xD8)
+    {
+      return false;
+    }
+
+    size_t offset = 2;
+    while (offset < imageSize)
+    {
+      if (jpeg[offset] != 0xFF)
+      {
+        return false;
+      }
+      while (offset < imageSize && jpeg[offset] == 0xFF)
+      {
+        ++offset;
+      }
+      if (offset >= imageSize)
+      {
+        return false;
+      }
+
+      const uint8_t marker = jpeg[offset++];
+      if (marker == 0xD9 || marker == 0xDA)
+      {
+        return false;
+      }
+      if (marker == 0xD8 || marker == 0x01 ||
+          (marker >= 0xD0 && marker <= 0xD7))
+      {
+        continue;
+      }
+      if (imageSize - offset < 2)
+      {
+        return false;
+      }
+
+      const size_t segmentLength =
+          (static_cast<size_t>(jpeg[offset]) << 8) | jpeg[offset + 1];
+      if (segmentLength < 2 || segmentLength > imageSize - offset)
+      {
+        return false;
+      }
+      if (isJpegStartOfFrameMarker(marker))
+      {
+        if (segmentLength < 7)
+        {
+          return false;
+        }
+        height = static_cast<uint16_t>(
+            (static_cast<uint16_t>(jpeg[offset + 3]) << 8) |
+            jpeg[offset + 4]);
+        width = static_cast<uint16_t>(
+            (static_cast<uint16_t>(jpeg[offset + 5]) << 8) |
+            jpeg[offset + 6]);
+        return width != 0 && height != 0;
+      }
+      offset += segmentLength;
+    }
+    return false;
   }
 };

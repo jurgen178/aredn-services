@@ -360,7 +360,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         </div>
       </div>
       <p id="fullscreenStatus" class="fullscreen-status" role="status" hidden></p>
-      <p class="note">The ESP32 refreshes one shared camera snapshot every 30 seconds.</p>
     </section>
   </main>
   <script>
