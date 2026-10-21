@@ -117,15 +117,15 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       border-radius: 0;
     }
     .camera-frame:fullscreen .camera-content {
-      width: min(100vw, 133.3333vh);
-      height: min(100vh, 75vw);
+      width: min(100vw, calc(100vh * var(--camera-crop-ratio, 1.333333)));
+      height: min(100vh, calc(100vw / var(--camera-crop-ratio, 1.333333)));
     }
     .camera-image {
       position: absolute;
-      inset: 0;
+      top: 0;
+      left: 0;
       width: 100%;
       height: 100%;
-      object-fit: contain;
     }
     .camera-image[hidden] { display: none; }
     .fullscreen-button {
@@ -200,7 +200,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
     .map-labels {
       position: absolute;
-      inset: 0;
+      top: 0;
+      left: 0;
       z-index: 3;
       width: 100%;
       height: 100%;
@@ -331,17 +332,30 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         <div class="camera-content">
           <img id="cameraImage" class="camera-image" alt="Latest camera snapshot of Bellevue Downtown" hidden>
           <svg id="mapLabels" class="map-labels" viewBox="0 0 100 75" preserveAspectRatio="none" role="img" aria-label="Landmark labels">
-            <!-- Point and label coordinates are percentages from the top-left; copy a group to add a place. -->
-            <g class="map-place" data-point-x="25" data-point-y="43" data-label-x="35" data-label-y="38" style="--marker-color: #f0a24b; --text-color: #fff;">
+            <!-- Point and label coordinates are source-image pixels from the top-left. -->
+            <g class="map-place"
+              data-point-x="1045" data-point-y="1145"
+              data-label-x="920" data-label-y="1320"
+              style="--marker-color: #f0a24b; --text-color: #fff;">
               <line class="map-place-line"></line>
               <rect class="map-place-badge" rx="1.2"></rect>
-              <circle class="map-place-dot" cx="25%" cy="43%" r="0.9"></circle>
-              <text class="map-place-text" x="35%" y="38%" text-anchor="middle" dominant-baseline="middle">Hospital</text>
+              <circle class="map-place-dot" r="0.9"></circle>
+              <text class="map-place-text" text-anchor="middle" dominant-baseline="middle">Overlake Hospital</text>
+            </g>
+            <g class="map-place"
+              data-point-x="1280" data-point-y="1180"
+              data-label-x="1650" data-label-y="900"
+              style="--marker-color: #55c7a5; --text-color: #fff;">
+              <line class="map-place-line"></line>
+              <rect class="map-place-badge" rx="1.2"></rect>
+              <circle class="map-place-dot" r="0.9"></circle>
+              <text class="map-place-text"
+                    text-anchor="middle"
+                    dominant-baseline="middle">Seattle Childrens Urgent Care</text>
             </g>
           </svg>
           <div id="cameraPlaceholder" class="camera-placeholder">
             <strong>Camera snapshot pending</strong>
-            <span>Configure the Reolink camera through the device setup access point.</span>
           </div>
           <div id="cameraOverlay" class="camera-overlay" hidden aria-label="Snapshot information">
             <span class="overlay-badge">AREDN CAMERA</span>
@@ -376,6 +390,14 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     const labelsButton = document.getElementById('labelsButton');
     const captureDate = document.getElementById('captureDate');
     const captureTime = document.getElementById('captureTime');
+    const cameraCrop = {
+      sourceWidth: 2560,
+      sourceHeight: 1920,
+      left: 704,
+      top: 640,
+      width: 1333,
+      height: 805
+    };
     let currentVersion = 0;
     let currentImageUrl = '';
     let imageRequestInProgress = false;
@@ -384,6 +406,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     let latestCameraStatus = null;
     let imageDisplayedAt = null;
     let lastRenderedCameraStatus = '';
+    let statusRequestInProgress = false;
     const fullscreenSupported =
       document.fullscreenEnabled !== false &&
       typeof cameraFrame.requestFullscreen === 'function' &&
@@ -451,6 +474,10 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
 
     function layoutMapLabels() {
       const viewBox = mapLabels.viewBox.baseVal;
+      const toSvgX = sourceX =>
+        viewBox.x + viewBox.width * (sourceX - cameraCrop.left) / cameraCrop.width;
+      const toSvgY = sourceY =>
+        viewBox.y + viewBox.height * (sourceY - cameraCrop.top) / cameraCrop.height;
       for (const place of mapLabels.querySelectorAll('.map-place')) {
         const pointX = Number(place.dataset.pointX);
         const pointY = Number(place.dataset.pointY);
@@ -460,19 +487,21 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         const marker = place.querySelector('.map-place-dot');
         const badge = place.querySelector('.map-place-badge');
         const label = place.querySelector('.map-place-text');
-        const pointSvgX = viewBox.x + viewBox.width * pointX / 100;
-        const pointSvgY = viewBox.y + viewBox.height * pointY / 100;
+        const pointSvgX = toSvgX(pointX);
+        const pointSvgY = toSvgY(pointY);
+        const labelSvgX = toSvgX(labelX);
+        const labelSvgY = toSvgY(labelY);
 
-        marker.setAttribute('cx', `${pointX}%`);
-        marker.setAttribute('cy', `${pointY}%`);
-        label.setAttribute('x', `${labelX}%`);
-        label.setAttribute('y', `${labelY}%`);
+        marker.setAttribute('cx', pointSvgX);
+        marker.setAttribute('cy', pointSvgY);
+        label.setAttribute('x', labelSvgX);
+        label.setAttribute('y', labelSvgY);
         line.setAttribute('x1', pointSvgX);
         line.setAttribute('y1', pointSvgY);
 
         const bounds = label.getBBox();
-        const paddingX = 0.6;
-        const paddingY = 0.4;
+        const paddingX = 0.4;
+        const paddingY = 0.25;
         badge.setAttribute('x', bounds.x - paddingX);
         badge.setAttribute('y', bounds.y - paddingY);
         badge.setAttribute('width', bounds.width + paddingX * 2);
@@ -505,6 +534,31 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       if (currentImageUrl && labelsEnabled) layoutMapLabels();
     }
 
+    function applyCameraCrop(naturalWidth, naturalHeight) {
+      const scaleX = naturalWidth / cameraCrop.sourceWidth;
+      const scaleY = naturalHeight / cameraCrop.sourceHeight;
+      const left = cameraCrop.left / cameraCrop.sourceWidth;
+      const top = cameraCrop.top / cameraCrop.sourceHeight;
+      const width = cameraCrop.width / cameraCrop.sourceWidth;
+      const height = cameraCrop.height / cameraCrop.sourceHeight;
+      const imageWidth = 100 / width;
+      const imageHeight = 100 / height;
+
+      cameraFrame.style.aspectRatio = `${cameraCrop.width * scaleX} / ${cameraCrop.height * scaleY}`;
+      cameraFrame.style.setProperty(
+        '--camera-crop-ratio',
+        String(cameraCrop.width * scaleX / (cameraCrop.height * scaleY))
+      );
+      cameraImage.style.left = `${-left * imageWidth}%`;
+      cameraImage.style.top = `${-top * imageHeight}%`;
+      cameraImage.style.width = `${imageWidth}%`;
+      cameraImage.style.height = `${imageHeight}%`;
+      mapLabels.setAttribute(
+        'viewBox',
+        `0 0 100 ${100 * cameraCrop.height * scaleY / (cameraCrop.width * scaleX)}`
+      );
+    }
+
     async function loadSnapshot(version, captureEpoch) {
       if (imageRequestInProgress || version <= currentVersion) return;
       imageRequestInProgress = true;
@@ -520,13 +574,23 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         if (requestToken !== imageRequestToken) return;
 
         nextImageUrl = URL.createObjectURL(imageBlob);
-        const previousImageUrl = currentImageUrl;
+        const decodedImage = new Image();
         await new Promise((resolve, reject) => {
-          cameraImage.onload = resolve;
-          cameraImage.onerror = () => reject(new Error('The snapshot is not a valid image.'));
-          cameraImage.src = nextImageUrl;
+          decodedImage.onload = resolve;
+          decodedImage.onerror = () => reject(new Error('The snapshot is not a valid image.'));
+          decodedImage.src = nextImageUrl;
         });
+        if (requestToken !== imageRequestToken) {
+          URL.revokeObjectURL(nextImageUrl);
+          nextImageUrl = '';
+          return;
+        }
+
+        const previousImageUrl = currentImageUrl;
+        applyCameraCrop(decodedImage.naturalWidth, decodedImage.naturalHeight);
+        cameraImage.src = nextImageUrl;
         currentImageUrl = nextImageUrl;
+        nextImageUrl = '';
         currentVersion = version;
         cameraImage.hidden = false;
         cameraPlaceholder.hidden = true;
@@ -555,12 +619,13 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           cameraStatus.textContent = `Could not load camera snapshot: ${error.message}`;
         }
       } finally {
-        imageRequestInProgress = false;
+        if (requestToken === imageRequestToken) imageRequestInProgress = false;
       }
     }
 
     async function refreshCameraStatus() {
-      if (document.hidden) return null;
+      if (document.hidden || statusRequestInProgress) return null;
+      statusRequestInProgress = true;
       try {
         const response = await fetch('/camera/api/status', { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -589,6 +654,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       } catch (error) {
         cameraStatus.textContent = `Could not read camera status: ${error.message}`;
         return null;
+      } finally {
+        statusRequestInProgress = false;
       }
     }
 
