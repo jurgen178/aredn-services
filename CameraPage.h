@@ -659,7 +659,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     updateFullscreenButton();
     synchronizeDeviceTime();
     refreshCameraStatus();
-    window.setInterval(refreshCameraStatus, 15000);
+    window.setInterval(refreshCameraStatus, 5000);
     window.setInterval(updateCameraStatusAge, 1000);
   </script>
 </body>

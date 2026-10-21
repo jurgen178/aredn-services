@@ -107,7 +107,7 @@ The board supports message submission, priority filtering, search, and administr
 
 The Camera Snapshot page shows a still JPEG image, refreshed about every 30 seconds. Its preview can be expanded to fullscreen in supported browsers. The SVG overlay is drawn in each visitor's browser and remains separate from the camera JPEG.
 
-The ESP32 uses Reolink's `cmd=Snap` JPEG endpoint without a width or height override, allowing the camera to return its main-stream resolution. A background FreeRTOS task obtains one snapshot every 30 seconds, independently of viewer count. The latest JPEG is held in two bounded PSRAM buffers so the active image can be served while the next one is downloaded. The browser checks the status endpoint every 15 seconds and downloads the JPEG only when its version changes. Refreshing pauses while the page is hidden.
+The ESP32 uses Reolink's `cmd=Snap` JPEG endpoint without a width or height override, allowing the camera to return its main-stream resolution. A background FreeRTOS task starts one snapshot request every 30 seconds, independently of viewer count; download time is part of that interval. The latest JPEG is held in two bounded PSRAM buffers so the active image can be served while the next one is downloaded. The browser checks the status endpoint every 5 seconds and downloads the JPEG only when its version changes. Refreshing pauses while the page is hidden.
 
 Snapshots larger than the 2 MiB buffer limit are rejected and reported in the camera status.
 

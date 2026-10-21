@@ -517,8 +517,14 @@ private:
         continue;
       }
 
+      const TickType_t pollStartedAt = xTaskGetTickCount();
       pollSnapshot(current);
-      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(SNAPSHOT_INTERVAL_MS));
+      const TickType_t elapsed = xTaskGetTickCount() - pollStartedAt;
+      const TickType_t interval = pdMS_TO_TICKS(SNAPSHOT_INTERVAL_MS);
+      if (elapsed < interval)
+      {
+        ulTaskNotifyTake(pdTRUE, interval - elapsed);
+      }
     }
   }
 
