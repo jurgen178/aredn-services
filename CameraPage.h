@@ -435,11 +435,24 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       fullscreenExitButton.setAttribute('aria-label', 'Exit camera fullscreen');
     }
 
+    function formatElapsedTime(totalSeconds) {
+      if (totalSeconds < 60) return `${totalSeconds}s`;
+
+      const seconds = String(totalSeconds % 60).padStart(2, '0');
+      const totalMinutes = Math.floor(totalSeconds / 60);
+      if (totalMinutes < 60) return `${totalMinutes}:${seconds}`;
+
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = String(totalMinutes % 60).padStart(2, '0');
+      return `${hours}:${minutes}:${seconds}`;
+    }
+
     function describeCameraStatus(status, displayedSeconds = 0) {
+      const elapsedTime = formatElapsedTime(displayedSeconds);
       if (status.image_available) {
-        if (status.state === 'stale') return `Snapshot refresh failed · last updated ${displayedSeconds}s ago · ${status.error}`;
-        if (status.state === 'updating') return `Updating snapshot · last updated ${displayedSeconds}s ago`;
-        return `Updated ${displayedSeconds}s ago · auto-refresh every ${status.refresh_seconds}s`;
+        if (status.state === 'stale') return `Snapshot refresh failed · last updated ${elapsedTime} ago · ${status.error}`;
+        if (status.state === 'updating') return `Updating snapshot · last updated ${elapsedTime} ago`;
+        return `Updated ${elapsedTime} ago · auto-refresh every ${status.refresh_seconds}s`;
       }
       if (status.state === 'not_configured') return 'Camera not configured';
       if (status.state === 'waiting_for_network') return 'Waiting for the server network connection';
