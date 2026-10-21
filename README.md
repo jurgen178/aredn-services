@@ -161,7 +161,9 @@ These endpoints require the admin session cookie created by login. Up to four ad
 
 ### Device and Setup APIs
 
-`GET /api/status` returns Wi-Fi, heap, FFat, and board information.
+`GET /api/status` returns Wi-Fi, heap, and uptime information, the existing top-level board fields, and a `services` object containing the full status details and volatile page access count for each main service. Status endpoints return indented JSON for easier reading in a browser. Counts include only successful requests for `/msg-board`, `/camera`, and `/tools`; API requests and the home page are not counted. Counts reset on restart.
+
+`GET /msg-board/api/status` returns the board readiness, message and storage metrics, and access count. `GET /tools/api/status` returns its status and access count. `GET /camera/api/status` returns the camera snapshot status and access count.
 
 `POST /api/time/sync` accepts a form field `epoch` and submits a browser time sample to the device clock. The root, camera, and message-board pages call it when opened; the message board also calls it during its periodic refresh. Large corrections and corrections after manual time setting require agreement from three distinct clients whose samples are within 10 seconds of each other. Each sample is advanced by the time elapsed since it arrived, a client's newer sample replaces its older one, and samples older than one hour are discarded.
 
@@ -178,7 +180,7 @@ The following setup pages and APIs are only available to clients connected to th
 
 ### Camera Snapshot API
 
-* `GET /camera/api/status` reports snapshot availability, age, and current state without revealing camera settings.
+* `GET /camera/api/status` reports the camera status, snapshot availability, and age without revealing camera settings.
 * `GET /camera/image.jpg` serves the current cached JPEG. Before the first successful snapshot, it returns `503`.
 
 ### Radio Tools

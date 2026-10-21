@@ -450,14 +450,14 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     function describeCameraStatus(status, displayedSeconds = 0) {
       const elapsedTime = formatElapsedTime(displayedSeconds);
       if (status.image_available) {
-        if (status.state === 'stale') return `Snapshot refresh failed · last updated ${elapsedTime} ago · ${status.error}`;
-        if (status.state === 'updating') return `Updating snapshot · last updated ${elapsedTime} ago`;
+        if (status.status === 'stale') return `Snapshot refresh failed · last updated ${elapsedTime} ago · ${status.error}`;
+        if (status.status === 'updating') return `Updating snapshot · last updated ${elapsedTime} ago`;
         return `Updated ${elapsedTime} ago · auto-refresh every ${status.refresh_seconds}s`;
       }
-      if (status.state === 'not_configured') return 'Camera not configured';
-      if (status.state === 'waiting_for_network') return 'Waiting for the server network connection';
-      if (status.state === 'storage_error') return 'Camera configuration storage is unavailable';
-      if (status.state === 'updating') return 'Connecting to the camera...';
+      if (status.status === 'not_configured') return 'Camera not configured';
+      if (status.status === 'waiting_for_network') return 'Waiting for the server network connection';
+      if (status.status === 'storage_error') return 'Camera configuration storage is unavailable';
+      if (status.status === 'updating') return 'Connecting to the camera...';
       return `Camera snapshot unavailable · ${status.error}`;
     }
 
@@ -706,7 +706,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         const deadline = Date.now() + 20000;
         while (Date.now() < deadline) {
           const status = await refreshCameraStatus();
-          if (status && status.state !== 'updating') {
+          if (status && status.status !== 'updating') {
             if (!status.image_available) {
               throw new Error(`Snapshot unavailable: ${status.error}`);
             }

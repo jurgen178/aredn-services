@@ -64,6 +64,9 @@ Preferences wifiPreferences;
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 FfatMessageBoard messageBoard;
 ReolinkCamera reolinkCamera;
+std::atomic<uint32_t> messageBoardPageAccessCount{0};
+std::atomic<uint32_t> cameraPageAccessCount{0};
+std::atomic<uint32_t> toolsPageAccessCount{0};
 // Atomic fields are read or updated from both the server task and the main loop.
 std::atomic<uint8_t> deviceTimeSource{TIME_SOURCE_UNSET};
 // Both revision counters change together, so readers take them under one spinlock.
@@ -1367,6 +1370,139 @@ void handleSubmitMessage(AsyncWebServerRequest* request)
   request->send(202, "application/json", responseBody);
 }
 
+struct MessageBoardStatusSnapshot
+{
+  bool ready;
+  uint32_t accessCount;
+  uint32_t messageCount;
+  size_t storageUsedBytes;
+  size_t storageTotalBytes;
+  size_t storageFreeBytes;
+  size_t recordSizeBytes;
+  size_t indexCapacity;
+  size_t indexBytes;
+};
+
+MessageBoardStatusSnapshot messageBoardStatusSnapshot()
+{
+  return {
+      messageBoard.ready(),
+      messageBoardPageAccessCount.load(std::memory_order_relaxed),
+      messageBoard.messageCount(),
+      messageBoard.usedBytes(),
+      messageBoard.totalBytes(),
+      messageBoard.freeBytes(),
+      messageBoard.recordSize(),
+      messageBoard.indexCapacity(),
+      messageBoard.indexBytes()};
+}
+
+bool formatMessageBoardStatusJson(const MessageBoardStatusSnapshot& status,
+                                  char* response,
+                                  size_t responseSize,
+                                  int indent)
+{
+  const int fieldIndent = indent + 2;
+  const int written = snprintf(
+      response,
+      responseSize,
+      "{\n"
+      "%*s\"status\": \"%s\",\n"
+      "%*s\"access_count\": %lu,\n"
+      "%*s\"board_ready\": %s,\n"
+      "%*s\"message_count\": %lu,\n"
+      "%*s\"storage_used_bytes\": %lu,\n"
+      "%*s\"storage_total_bytes\": %lu,\n"
+      "%*s\"storage_free_bytes\": %lu,\n"
+      "%*s\"record_size_bytes\": %lu,\n"
+      "%*s\"index_capacity\": %lu,\n"
+      "%*s\"index_bytes\": %lu\n"
+      "%*s}",
+      fieldIndent, "",
+      status.ready ? "ok" : "unavailable",
+      fieldIndent, "",
+      static_cast<unsigned long>(status.accessCount),
+      fieldIndent, "",
+      status.ready ? "true" : "false",
+      fieldIndent, "",
+      static_cast<unsigned long>(status.messageCount),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.storageUsedBytes),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.storageTotalBytes),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.storageFreeBytes),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.recordSizeBytes),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.indexCapacity),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.indexBytes),
+      indent, "");
+  return written >= 0 && static_cast<size_t>(written) < responseSize;
+}
+
+bool formatCameraStatusJson(const ReolinkCamera::StatusSnapshot& status,
+                            char* response,
+                            size_t responseSize,
+                            int indent)
+{
+  const int fieldIndent = indent + 2;
+  const int written = snprintf(
+      response,
+      responseSize,
+      "{\n"
+      "%*s\"status\": \"%s\",\n"
+      "%*s\"error\": \"%s\",\n"
+      "%*s\"http_status\": %d,\n"
+      "%*s\"image_available\": %s,\n"
+      "%*s\"version\": %lu,\n"
+      "%*s\"age_seconds\": %lu,\n"
+      "%*s\"refresh_seconds\": %lu,\n"
+      "%*s\"capture_epoch\": %lu,\n"
+      "%*s\"access_count\": %lu\n"
+      "%*s}",
+      fieldIndent, "",
+      status.status,
+      fieldIndent, "",
+      status.error,
+      fieldIndent, "",
+      static_cast<int>(status.httpStatus),
+      fieldIndent, "",
+      status.imageAvailable ? "true" : "false",
+      fieldIndent, "",
+      static_cast<unsigned long>(status.version),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.ageSeconds),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.refreshSeconds),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.captureEpoch),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.accessCount),
+      indent, "");
+  return written >= 0 && static_cast<size_t>(written) < responseSize;
+}
+
+bool formatToolsStatusJson(uint32_t accessCount,
+                           char* response,
+                           size_t responseSize,
+                           int indent)
+{
+  const int written = snprintf(
+      response,
+      responseSize,
+      "{\n"
+      "%*s\"status\": \"ok\",\n"
+      "%*s\"access_count\": %lu\n"
+      "%*s}",
+      indent + 2, "",
+      indent + 2, "",
+      static_cast<unsigned long>(accessCount),
+      indent, "");
+  return written >= 0 && static_cast<size_t>(written) < responseSize;
+}
+
 void registerRoutes()
 {
   // Route handlers are asynchronous; long-running storage operations use the board's mutex.
@@ -1441,10 +1577,14 @@ void registerRoutes()
     const bool connected = WiFi.status() == WL_CONNECTED;
     const String apAddress = WiFi.softAPIP().toString();
     const String stationAddress = connected ? WiFi.localIP().toString() : "0.0.0.0";
-    char response[192];
+    char response[224];
     snprintf(response, sizeof(response),
-             "{\"state\":\"%s\",\"wifi_connected\":%s,"
-             "\"ap_ip\":\"%s\",\"sta_ip\":\"%s\"}",
+             "{\n"
+             "  \"state\": \"%s\",\n"
+             "  \"wifi_connected\": %s,\n"
+             "  \"ap_ip\": \"%s\",\n"
+             "  \"sta_ip\": \"%s\"\n"
+             "}",
              stateName,
              connected ? "true" : "false",
              apAddress.c_str(),
@@ -1636,7 +1776,17 @@ void registerRoutes()
 
   server.on("/camera/api/status", HTTP_GET, [](AsyncWebServerRequest* request)
   {
-    reolinkCamera.handleStatus(request);
+    const ReolinkCamera::StatusSnapshot status =
+        reolinkCamera.statusSnapshot(
+            cameraPageAccessCount.load(std::memory_order_relaxed));
+    char response[448];
+    if (!formatCameraStatusJson(status, response, sizeof(response), 0))
+    {
+      request->send(500, "application/json",
+                    "{\"error\":\"status_format_failed\"}");
+      return;
+    }
+    request->send(200, "application/json; charset=utf-8", response);
   });
 
   server.on("/camera/api/snapshot", HTTP_POST, [](AsyncWebServerRequest* request)
@@ -1756,8 +1906,8 @@ void registerRoutes()
   {
     request->send(200, "application/json",
                   isAdminAuthenticated(request)
-                      ? "{\"authenticated\":true}"
-                      : "{\"authenticated\":false}");
+                      ? "{\n  \"authenticated\": true\n}"
+                      : "{\n  \"authenticated\": false\n}");
   });
 
   server.on("/msg-board/api/admin/import", HTTP_POST, [](AsyncWebServerRequest* request)
@@ -1860,26 +2010,28 @@ void registerRoutes()
     switch (importJobState.load(std::memory_order_acquire))
     {
       case ImportJobState::Running:
-        request->send(200, "application/json", "{\"state\":\"processing\"}");
+        request->send(200, "application/json",
+                      "{\n  \"state\": \"processing\"\n}");
         break;
       case ImportJobState::Succeeded:
       {
-        char response[48];
-        snprintf(response, sizeof(response), "{\"state\":\"done\",\"count\":%lu}",
+        char response[64];
+        snprintf(response, sizeof(response),
+                 "{\n  \"state\": \"done\",\n  \"count\": %lu\n}",
                  static_cast<unsigned long>(importJobCount.load(std::memory_order_relaxed)));
         request->send(200, "application/json", response);
         break;
       }
       case ImportJobState::Failed:
       {
-        String response = "{\"state\":\"failed\",\"reason\":\"";
+        String response = "{\n  \"state\": \"failed\",\n  \"reason\": \"";
         response += importJobReason;
-        response += "\"}";
+        response += "\"\n}";
         request->send(200, "application/json", response);
         break;
       }
       default:
-        request->send(200, "application/json", "{\"state\":\"idle\"}");
+        request->send(200, "application/json", "{\n  \"state\": \"idle\"\n}");
         break;
     }
   });
@@ -1894,22 +2046,24 @@ void registerRoutes()
     }
     if (messageMutationActive.load(std::memory_order_acquire))
     {
-      request->send(200, "application/json", "{\"state\":\"processing\"}");
+      request->send(200, "application/json",
+                    "{\n  \"state\": \"processing\"\n}");
       return;
     }
     switch (messageMutationState.load(std::memory_order_acquire))
     {
       case ImportJobState::Running:
-        request->send(200, "application/json", "{\"state\":\"processing\"}");
+        request->send(200, "application/json",
+                      "{\n  \"state\": \"processing\"\n}");
         break;
       case ImportJobState::Succeeded:
-        request->send(200, "application/json", "{\"state\":\"done\"}");
+        request->send(200, "application/json", "{\n  \"state\": \"done\"\n}");
         break;
       case ImportJobState::Failed:
-        request->send(200, "application/json", "{\"state\":\"failed\"}");
+        request->send(200, "application/json", "{\n  \"state\": \"failed\"\n}");
         break;
       default:
-        request->send(200, "application/json", "{\"state\":\"idle\"}");
+        request->send(200, "application/json", "{\n  \"state\": \"idle\"\n}");
         break;
     }
   });
@@ -2264,32 +2418,104 @@ void registerRoutes()
     const bool connected = WiFi.status() == WL_CONNECTED;
     const String ipAddress = connected ? WiFi.localIP().toString() : "0.0.0.0";
     const int rssi = connected ? WiFi.RSSI() : 0;
-    char response[480];
+    const MessageBoardStatusSnapshot boardStatus = messageBoardStatusSnapshot();
+    const ReolinkCamera::StatusSnapshot cameraStatus =
+        reolinkCamera.statusSnapshot(
+            cameraPageAccessCount.load(std::memory_order_relaxed));
+    const uint32_t toolsAccessCount =
+        toolsPageAccessCount.load(std::memory_order_relaxed);
+    char boardStatusJson[512];
+    char cameraStatusJson[448];
+    char toolsStatusJson[96];
+    char response[2048];
+    if (!formatMessageBoardStatusJson(
+            boardStatus, boardStatusJson, sizeof(boardStatusJson), 4) ||
+        !formatCameraStatusJson(
+            cameraStatus, cameraStatusJson, sizeof(cameraStatusJson), 4) ||
+        !formatToolsStatusJson(
+            toolsAccessCount, toolsStatusJson, sizeof(toolsStatusJson), 4))
+    {
+      request->send(500, "application/json",
+                    "{\"error\":\"status_format_failed\"}");
+      return;
+    }
 
-    snprintf(
+    const int written = snprintf(
         response,
         sizeof(response),
-      "{\"service\":\"aredn-service\",\"status\":\"ok\","
-        "\"board_ready\":%s,"
-        "\"message_count\":%lu,"
-        "\"storage_used_bytes\":%lu,\"storage_total_bytes\":%lu,"
-        "\"storage_free_bytes\":%lu,\"record_size_bytes\":%lu,"
-        "\"index_capacity\":%lu,\"index_bytes\":%lu,"
-        "\"uptime_ms\":%lu,\"free_heap\":%lu,\"wifi_connected\":%s,"
-        "\"ip\":\"%s\",\"rssi_dbm\":%d}",
-      messageBoard.ready() ? "true" : "false",
-      static_cast<unsigned long>(messageBoard.messageCount()),
-      static_cast<unsigned long>(messageBoard.usedBytes()),
-      static_cast<unsigned long>(messageBoard.totalBytes()),
-      static_cast<unsigned long>(messageBoard.freeBytes()),
-      static_cast<unsigned long>(messageBoard.recordSize()),
-      static_cast<unsigned long>(messageBoard.indexCapacity()),
-      static_cast<unsigned long>(messageBoard.indexBytes()),
+        "{\n"
+        "  \"service\": \"aredn-service\",\n"
+        "  \"status\": \"ok\",\n"
+        "  \"board_ready\": %s,\n"
+        "  \"message_count\": %lu,\n"
+        "  \"storage_used_bytes\": %lu,\n"
+        "  \"storage_total_bytes\": %lu,\n"
+        "  \"storage_free_bytes\": %lu,\n"
+        "  \"record_size_bytes\": %lu,\n"
+        "  \"index_capacity\": %lu,\n"
+        "  \"index_bytes\": %lu,\n"
+        "  \"uptime_ms\": %lu,\n"
+        "  \"free_heap\": %lu,\n"
+        "  \"wifi_connected\": %s,\n"
+        "  \"ip\": \"%s\",\n"
+        "  \"rssi_dbm\": %d,\n"
+        "  \"services\": {\n"
+        "    \"msg-board\": %s,\n"
+        "    \"camera\": %s,\n"
+        "    \"tools\": %s\n"
+        "  }\n"
+        "}",
+        boardStatus.ready ? "true" : "false",
+        static_cast<unsigned long>(boardStatus.messageCount),
+        static_cast<unsigned long>(boardStatus.storageUsedBytes),
+        static_cast<unsigned long>(boardStatus.storageTotalBytes),
+        static_cast<unsigned long>(boardStatus.storageFreeBytes),
+        static_cast<unsigned long>(boardStatus.recordSizeBytes),
+        static_cast<unsigned long>(boardStatus.indexCapacity),
+        static_cast<unsigned long>(boardStatus.indexBytes),
         static_cast<unsigned long>(millis()),
         static_cast<unsigned long>(ESP.getFreeHeap()),
         connected ? "true" : "false",
         ipAddress.c_str(),
-        rssi);
+        rssi,
+        boardStatusJson,
+        cameraStatusJson,
+        toolsStatusJson);
+    if (written < 0 || static_cast<size_t>(written) >= sizeof(response))
+    {
+      request->send(500, "application/json",
+                    "{\"error\":\"status_format_failed\"}");
+      return;
+    }
+    request->send(200, "application/json", response);
+  });
+
+  server.on("/msg-board/api/status", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    const MessageBoardStatusSnapshot status = messageBoardStatusSnapshot();
+    char response[512];
+    if (!formatMessageBoardStatusJson(status, response, sizeof(response), 0))
+    {
+      request->send(500, "application/json",
+                    "{\"error\":\"status_format_failed\"}");
+      return;
+    }
+    request->send(200, "application/json", response);
+  });
+
+  server.on("/tools/api/status", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    char response[96];
+    if (!formatToolsStatusJson(
+            toolsPageAccessCount.load(std::memory_order_relaxed),
+            response,
+            sizeof(response),
+            0))
+    {
+      request->send(500, "application/json",
+                    "{\"error\":\"status_format_failed\"}");
+      return;
+    }
     request->send(200, "application/json", response);
   });
 
@@ -2335,6 +2561,7 @@ void registerRoutes()
       request->send(404, "text/plain; charset=utf-8", "Not found");
       return;
     }
+    messageBoardPageAccessCount.fetch_add(1, std::memory_order_relaxed);
     AsyncWebServerResponse* response = request->beginResponse_P(
         200, "text/html; charset=utf-8", BOARD_PAGE);
     response->addHeader("Cache-Control", "no-cache, must-revalidate");
@@ -2348,6 +2575,7 @@ void registerRoutes()
       request->send(404, "text/plain; charset=utf-8", "Not found");
       return;
     }
+    cameraPageAccessCount.fetch_add(1, std::memory_order_relaxed);
     AsyncWebServerResponse* response = request->beginResponse_P(
         200, "text/html; charset=utf-8", CAMERA_PAGE);
     response->addHeader("Cache-Control", "no-cache, must-revalidate");
@@ -2361,6 +2589,7 @@ void registerRoutes()
       request->send(404, "text/plain; charset=utf-8", "Not found");
       return;
     }
+    toolsPageAccessCount.fetch_add(1, std::memory_order_relaxed);
     AsyncWebServerResponse* response = request->beginResponse_P(
         200, "text/html; charset=utf-8", TOOLS_PAGE);
     response->addHeader("Cache-Control", "no-cache, must-revalidate");

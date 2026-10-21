@@ -122,8 +122,8 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
         const status = await response.json();
         const httpStatus = status.http_status ? ` (HTTP ${status.http_status})` : '';
         cameraState.textContent = status.image_available
-          ? `Camera ${status.state}; snapshot ${status.age_seconds}s old${httpStatus}.`
-          : `Camera ${status.state}; ${status.error}${httpStatus}.`;
+          ? `Camera ${status.status}; snapshot ${status.age_seconds}s old${httpStatus}.`
+          : `Camera ${status.status}; ${status.error}${httpStatus}.`;
       } catch (error) {
         cameraState.textContent = `Camera status unavailable: ${error.message}`;
       }

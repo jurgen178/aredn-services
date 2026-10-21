@@ -21,6 +21,19 @@ public:
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
   static constexpr uint32_t MIN_VALID_CAPTURE_EPOCH = 1577836800UL;
 
+  struct StatusSnapshot
+  {
+    const char* status;
+    const char* error;
+    int16_t httpStatus;
+    bool imageAvailable;
+    uint32_t version;
+    uint32_t ageSeconds;
+    uint32_t refreshSeconds;
+    uint32_t captureEpoch;
+    uint32_t accessCount;
+  };
+
   bool begin()
   {
     configMutex_ = xSemaphoreCreateMutex();
@@ -138,7 +151,7 @@ public:
     request->send(response);
   }
 
-  void handleStatus(AsyncWebServerRequest* request) const
+  StatusSnapshot statusSnapshot(uint32_t pageAccessCount) const
   {
     const bool available = imageAvailable_.load(std::memory_order_acquire);
     const State currentState = state_.load(std::memory_order_acquire);
@@ -156,21 +169,16 @@ public:
             ? static_cast<uint32_t>(estimatedCaptureEpoch)
             : 0;
 
-    char response[256];
-    snprintf(response, sizeof(response),
-             "{\"state\":\"%s\",\"error\":\"%s\",\"http_status\":%d,"
-             "\"image_available\":%s,\"version\":%lu,"
-             "\"age_seconds\":%lu,\"refresh_seconds\":%lu,"
-             "\"capture_epoch\":%lu}",
-             stateName(currentState, available),
-             errorName(currentError),
-             static_cast<int>(httpStatus),
-             available ? "true" : "false",
-             static_cast<unsigned long>(version_.load(std::memory_order_acquire)),
-             static_cast<unsigned long>(ageSeconds),
-             static_cast<unsigned long>(SNAPSHOT_INTERVAL_MS / 1000),
-             static_cast<unsigned long>(captureEpoch));
-    request->send(200, "application/json; charset=utf-8", response);
+    return {
+        stateName(currentState, available),
+        errorName(currentError),
+        httpStatus,
+        available,
+        version_.load(std::memory_order_acquire),
+        ageSeconds,
+        SNAPSHOT_INTERVAL_MS / 1000,
+        captureEpoch,
+        pageAccessCount};
   }
 
   void requestSnapshot(AsyncWebServerRequest* request)
