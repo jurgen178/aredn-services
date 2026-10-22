@@ -79,12 +79,16 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
     h2 { margin: 0; font-size: 1.15rem; }
     .status {
+      flex: 0 0 clamp(12rem, 24vw, 22rem);
+      min-width: 0;
       margin: 0;
       color: #5c6e66;
       font-size: 0.85rem;
+      overflow-wrap: anywhere;
     }
     .panel-actions {
       display: flex;
+      min-width: 0;
       flex-wrap: wrap;
       align-items: center;
       gap: 12px;
@@ -130,6 +134,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
     .camera-image[hidden] { display: none; }
     .fullscreen-button {
+      flex: 0 0 auto;
       padding: 8px 11px;
       color: #173b33;
       font: inherit;
@@ -301,7 +306,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
     @media (max-width: 620px) {
       .header-inner, .panel-head { align-items: flex-start; flex-direction: column; }
-      .panel-actions { width: 100%; justify-content: space-between; }
+      .panel-actions { width: 100%; justify-content: flex-start; }
+      .status { flex-basis: 100%; }
       .panel { padding: 16px; }
       main { padding: 20px 14px; }
     }
@@ -324,7 +330,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         <h2 id="cameraImageTitle">Latest camera image</h2>
         <div class="panel-actions">
           <p id="cameraStatus" class="status" role="status">Camera not configured</p>
-          <button id="refreshButton" class="fullscreen-button" type="button">Get image now</button>
+          <button id="refreshButton" class="fullscreen-button" type="button">Manual snapshot now</button>
           <button id="labelsButton" class="fullscreen-button" type="button" disabled>Hide labels</button>
           <button id="screenshotButton" class="fullscreen-button" type="button" disabled>Save screenshot</button>
           <button id="fullscreenButton" class="fullscreen-button" type="button">Fullscreen</button>
@@ -359,9 +365,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
                     dominant-baseline="middle">Seattle Childrens Urgent Care</text>
             </g>
             <g class="map-place"
-              data-point-x="930" data-point-y="950"
+              data-point-x="930" data-point-y="990"
               data-label-x="950" data-label-y="870"
-              style="--marker-color: #55c7a5; --text-color: #fff;">
+              style="--marker-color: #3974f2; --text-color: #fff;">
               <line class="map-place-line"></line>
               <rect class="map-place-badge" rx="1.2"></rect>
               <circle class="map-place-dot" r="0.9"></circle>
@@ -549,10 +555,19 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         label.style.fontSize = `${fontSize}px`;
         label.setAttribute('x', labelSvgX);
         label.setAttribute('y', labelSvgY);
-        const availableWidth = 2 * Math.min(
-          labelSvgX - viewBox.x,
-          viewBox.x + viewBox.width - labelSvgX
-        );
+        const leftSpace = labelSvgX - viewBox.x;
+        const rightSpace = viewBox.x + viewBox.width - labelSvgX;
+        const textAnchor = leftSpace < rightSpace * 0.75
+          ? 'start'
+          : rightSpace < leftSpace * 0.75
+            ? 'end'
+            : 'middle';
+        label.setAttribute('text-anchor', textAnchor);
+        const availableWidth = textAnchor === 'start'
+          ? rightSpace
+          : textAnchor === 'end'
+            ? leftSpace
+            : 2 * Math.min(leftSpace, rightSpace);
         const textWidth = Math.max(label.getComputedTextLength(), label.getBBox().width);
         const sizeScale = Math.min(
           targetSizeScale,
