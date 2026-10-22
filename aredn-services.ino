@@ -2454,7 +2454,7 @@ void registerRoutes()
         "  \"record_size_bytes\": %lu,\n"
         "  \"index_capacity\": %lu,\n"
         "  \"index_bytes\": %lu,\n"
-        "  \"uptime_ms\": %lu,\n"
+        "  \"uptime_s\": %lu,\n"
         "  \"free_heap\": %lu,\n"
         "  \"wifi_connected\": %s,\n"
         "  \"ip\": \"%s\",\n"
@@ -2473,7 +2473,7 @@ void registerRoutes()
         static_cast<unsigned long>(boardStatus.recordSizeBytes),
         static_cast<unsigned long>(boardStatus.indexCapacity),
         static_cast<unsigned long>(boardStatus.indexBytes),
-        static_cast<unsigned long>(millis()),
+        static_cast<unsigned long>(millis() / 1000),
         static_cast<unsigned long>(ESP.getFreeHeap()),
         connected ? "true" : "false",
         ipAddress.c_str(),

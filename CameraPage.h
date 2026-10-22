@@ -85,6 +85,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
     .panel-actions {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: 12px;
     }
@@ -318,13 +319,14 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     </div>
   </header>
   <main>
-    <section class="panel" aria-labelledby="previewTitle">
+    <section class="panel" aria-labelledby="cameraImageTitle">
       <div class="panel-head">
-        <h2 id="previewTitle">Camera preview</h2>
+        <h2 id="cameraImageTitle">Latest camera image</h2>
         <div class="panel-actions">
           <p id="cameraStatus" class="status" role="status">Camera not configured</p>
           <button id="refreshButton" class="fullscreen-button" type="button">Get image now</button>
           <button id="labelsButton" class="fullscreen-button" type="button" disabled>Hide labels</button>
+          <button id="screenshotButton" class="fullscreen-button" type="button" disabled>Save screenshot</button>
           <button id="fullscreenButton" class="fullscreen-button" type="button">Fullscreen</button>
         </div>
       </div>
@@ -335,17 +337,19 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           <svg id="mapLabels" class="map-labels" viewBox="0 0 100 75" preserveAspectRatio="none" role="img" aria-label="Landmark labels">
             <!-- Point and label coordinates are source-image pixels from the top-left. -->
             <g class="map-place"
-              data-point-x="1045" data-point-y="1145"
-              data-label-x="920" data-label-y="1320"
+              data-point-x="1040" data-point-y="1160"
+              data-label-x="850" data-label-y="1260"
               style="--marker-color: #f0a24b; --text-color: #fff;">
               <line class="map-place-line"></line>
               <rect class="map-place-badge" rx="1.2"></rect>
               <circle class="map-place-dot" r="0.9"></circle>
-              <text class="map-place-text" text-anchor="middle" dominant-baseline="middle">Overlake Hospital</text>
+              <text class="map-place-text" 
+                    text-anchor="middle" 
+                    dominant-baseline="middle">Overlake Hospital</text>
             </g>
             <g class="map-place"
               data-point-x="1280" data-point-y="1180"
-              data-label-x="1650" data-label-y="900"
+              data-label-x="1460" data-label-y="1040"
               style="--marker-color: #55c7a5; --text-color: #fff;">
               <line class="map-place-line"></line>
               <rect class="map-place-badge" rx="1.2"></rect>
@@ -353,6 +357,17 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
               <text class="map-place-text"
                     text-anchor="middle"
                     dominant-baseline="middle">Seattle Childrens Urgent Care</text>
+            </g>
+            <g class="map-place"
+              data-point-x="930" data-point-y="950"
+              data-label-x="950" data-label-y="870"
+              style="--marker-color: #55c7a5; --text-color: #fff;">
+              <line class="map-place-line"></line>
+              <rect class="map-place-badge" rx="1.2"></rect>
+              <circle class="map-place-dot" r="0.9"></circle>
+              <text class="map-place-text"
+                    text-anchor="middle"
+                    dominant-baseline="middle">Sea-Tac Northbound Flight Path</text>
             </g>
           </svg>
           <div id="cameraPlaceholder" class="camera-placeholder">
@@ -389,6 +404,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     const cameraStatus = document.getElementById('cameraStatus');
     const refreshButton = document.getElementById('refreshButton');
     const labelsButton = document.getElementById('labelsButton');
+    const screenshotButton = document.getElementById('screenshotButton');
     const captureDate = document.getElementById('captureDate');
     const captureTime = document.getElementById('captureTime');
     const cameraCrop = {
@@ -399,19 +415,38 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       width: 1333,
       height: 805
     };
+    let screenshotInProgress = false;
     let currentVersion = 0;
     let currentImageUrl = '';
     let imageRequestInProgress = false;
     let imageRequestToken = 0;
+    let imageRequestController = null;
     let labelsEnabled = true;
     let latestCameraStatus = null;
     let imageDisplayedAt = null;
     let lastRenderedCameraStatus = '';
     let statusRequestInProgress = false;
+    let statusRequestToken = 0;
+    let statusRequestController = null;
     const fullscreenSupported =
       document.fullscreenEnabled !== false &&
       typeof cameraFrame.requestFullscreen === 'function' &&
       typeof document.exitFullscreen === 'function';
+
+    async function fetchWithTimeout(url, options, timeoutMs, readResponse, controller) {
+      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        return await readResponse(response);
+      } catch (error) {
+        if (controller.signal.aborted) {
+          throw new Error(`Request timed out after ${timeoutMs / 1000} seconds.`);
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    }
 
     async function synchronizeDeviceTime() {
       try {
@@ -440,11 +475,11 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
 
       const seconds = String(totalSeconds % 60).padStart(2, '0');
       const totalMinutes = Math.floor(totalSeconds / 60);
-      if (totalMinutes < 60) return `${totalMinutes}:${seconds}`;
+      if (totalMinutes < 60) return `${totalMinutes}m:${seconds}s`;
 
       const hours = Math.floor(totalMinutes / 60);
       const minutes = String(totalMinutes % 60).padStart(2, '0');
-      return `${hours}:${minutes}:${seconds}`;
+      return `${hours}h:${minutes}m:${seconds}s`;
     }
 
     function describeCameraStatus(status, displayedSeconds = 0) {
@@ -566,8 +601,229 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     function updateLabelsButton() {
       labelsButton.textContent = labelsEnabled ? 'Hide labels' : 'Show labels';
       labelsButton.disabled = !currentImageUrl;
+      screenshotButton.disabled = !currentImageUrl || screenshotInProgress;
       mapLabels.classList.toggle('is-visible', Boolean(currentImageUrl) && labelsEnabled);
       if (currentImageUrl && labelsEnabled) layoutMapLabels();
+    }
+
+    function getScreenshotBox(element, rootRect) {
+      const rect = element.getBoundingClientRect();
+      return {
+        x: rect.left - rootRect.left,
+        y: rect.top - rootRect.top,
+        width: rect.width,
+        height: rect.height
+      };
+    }
+
+    function drawRoundedRectangle(context, x, y, width, height, radius) {
+      const cornerRadius = Math.min(radius, width / 2, height / 2);
+      context.beginPath();
+      context.moveTo(x + cornerRadius, y);
+      context.arcTo(x + width, y, x + width, y + height, cornerRadius);
+      context.arcTo(x + width, y + height, x, y + height, cornerRadius);
+      context.arcTo(x, y + height, x, y, cornerRadius);
+      context.arcTo(x, y, x + width, y, cornerRadius);
+      context.closePath();
+    }
+
+    function drawScreenshotOverlay(context, canvas) {
+      if (cameraOverlay.hidden) return;
+
+      const cameraContent = cameraImage.parentElement;
+      const contentRect = cameraContent.getBoundingClientRect();
+      const scaleX = canvas.width / contentRect.width;
+      const scaleY = canvas.height / contentRect.height;
+      const width = contentRect.width;
+      const height = contentRect.height;
+      context.save();
+      context.scale(scaleX, scaleY);
+
+      const gradient = context.createLinearGradient(0, height * 0.38, 0, height);
+      gradient.addColorStop(0, 'rgba(9, 19, 20, 0)');
+      gradient.addColorStop(1, 'rgba(9, 19, 20, 0.82)');
+      context.fillStyle = gradient;
+      context.fillRect(0, height * 0.38, width, height * 0.62);
+
+      const badge = cameraOverlay.querySelector('.overlay-badge');
+      const badgeBox = getScreenshotBox(badge, contentRect);
+      const badgeStyle = getComputedStyle(badge);
+      const badgeRadius = Number.parseFloat(badgeStyle.borderTopLeftRadius) || 0;
+      drawRoundedRectangle(
+        context,
+        badgeBox.x,
+        badgeBox.y,
+        badgeBox.width,
+        badgeBox.height,
+        badgeRadius
+      );
+      context.fillStyle = badgeStyle.backgroundColor;
+      context.fill();
+      const borderWidth = Number.parseFloat(badgeStyle.borderWidth) || 0;
+      if (borderWidth > 0) {
+        context.lineWidth = borderWidth;
+        context.strokeStyle = badgeStyle.borderColor;
+        context.stroke();
+      }
+
+      const overlayText = cameraOverlay.querySelectorAll(
+        '.overlay-badge, .overlay-kicker, .overlay-location strong, #captureDate, #captureTime'
+      );
+      for (const element of overlayText) {
+        const text = element.textContent.trim();
+        if (!text) continue;
+        const box = getScreenshotBox(element, contentRect);
+        const style = getComputedStyle(element);
+        const fontSize = Number.parseFloat(style.fontSize);
+        context.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+        context.fillStyle = style.color;
+        context.textBaseline = 'middle';
+        context.textAlign = style.textAlign === 'right'
+          ? 'right'
+          : style.textAlign === 'center'
+            ? 'center'
+            : 'left';
+        const isBadge = element.classList.contains('overlay-badge');
+        const leftInset = isBadge
+          ? Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.borderLeftWidth)
+          : 0;
+        const rightInset = isBadge
+          ? Number.parseFloat(style.paddingRight) + Number.parseFloat(style.borderRightWidth)
+          : 0;
+        const contentLeft = box.x + leftInset;
+        const contentRight = box.x + box.width - rightInset;
+        const displayText = style.textTransform === 'uppercase' ? text.toUpperCase() : text;
+        const characters = Array.from(displayText);
+        const letterSpacing = Number.parseFloat(style.letterSpacing) || 0;
+        const textWidth = letterSpacing === 0
+          ? context.measureText(displayText).width
+          : characters.reduce(
+            (width, character) => width + context.measureText(character).width,
+            0
+          ) + letterSpacing * Math.max(0, characters.length - 1);
+        let x = contentLeft;
+        if (context.textAlign === 'right') x = contentRight - textWidth;
+        if (context.textAlign === 'center') {
+          x = (contentLeft + contentRight - textWidth) / 2;
+        }
+        context.textAlign = 'left';
+        if (element.closest('.overlay-bottom')) {
+          context.shadowColor = 'rgba(0, 0, 0, 0.4)';
+          context.shadowBlur = 8;
+          context.shadowOffsetY = 1;
+        }
+        if (letterSpacing === 0) {
+          context.fillText(displayText, x, box.y + box.height / 2);
+        } else {
+          for (const character of characters) {
+            context.fillText(character, x, box.y + box.height / 2);
+            x += context.measureText(character).width + letterSpacing;
+          }
+        }
+        context.shadowColor = 'transparent';
+        context.shadowBlur = 0;
+        context.shadowOffsetY = 0;
+      }
+      context.restore();
+    }
+
+    async function drawMapLabelsToCanvas(context, width, height) {
+      if (!mapLabels.classList.contains('is-visible')) return;
+
+      const svgNamespace = 'http://www.w3.org/2000/svg';
+      const labelsSvg = mapLabels.cloneNode(true);
+      labelsSvg.setAttribute('xmlns', svgNamespace);
+      labelsSvg.setAttribute('width', String(width));
+      labelsSvg.setAttribute('height', String(height));
+      const style = document.createElementNS(svgNamespace, 'style');
+      style.textContent = `
+        .map-place-line { stroke: var(--marker-color, #f0a24b); stroke-width: 0.25; opacity: 0.9; }
+        .map-place-badge { fill: rgb(9 19 20 / 82%); stroke: rgb(255 255 255 / 30%); stroke-width: 0.2; }
+        .map-place-dot { fill: var(--marker-color, #f0a24b); stroke: #fff; stroke-width: 0.35; }
+        .map-place-text { fill: var(--text-color, #fff); stroke: rgb(8 18 19 / 90%); stroke-width: 0.65; stroke-linejoin: round; paint-order: stroke; font-family: "Segoe UI", sans-serif; font-size: 2px; font-weight: 700; }
+      `;
+      labelsSvg.insertBefore(style, labelsSvg.firstChild);
+      const labelsBlob = new Blob(
+        [new XMLSerializer().serializeToString(labelsSvg)],
+        { type: 'image/svg+xml;charset=utf-8' }
+      );
+      const labelsUrl = URL.createObjectURL(labelsBlob);
+      try {
+        const labelsImage = new Image();
+        await new Promise((resolve, reject) => {
+          const timeoutId = window.setTimeout(
+            () => reject(new Error('The map labels could not be rendered in time.')),
+            10000
+          );
+          labelsImage.onload = () => {
+            window.clearTimeout(timeoutId);
+            resolve();
+          };
+          labelsImage.onerror = () => {
+            window.clearTimeout(timeoutId);
+            reject(new Error('The map labels could not be rendered.'));
+          };
+          labelsImage.src = labelsUrl;
+        });
+        context.drawImage(labelsImage, 0, 0, width, height);
+      } finally {
+        URL.revokeObjectURL(labelsUrl);
+      }
+    }
+
+    async function saveCameraScreenshot() {
+      if (!currentImageUrl || !cameraImage.naturalWidth || screenshotInProgress) return;
+      screenshotInProgress = true;
+      screenshotButton.disabled = true;
+      try {
+        const scaleX = cameraImage.naturalWidth / cameraCrop.sourceWidth;
+        const scaleY = cameraImage.naturalHeight / cameraCrop.sourceHeight;
+        const cropWidth = Math.round(cameraCrop.width * scaleX);
+        const cropHeight = Math.round(cameraCrop.height * scaleY);
+        const canvas = document.createElement('canvas');
+        canvas.width = cropWidth;
+        canvas.height = cropHeight;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Could not create the screenshot canvas.');
+
+        context.drawImage(
+          cameraImage,
+          cameraCrop.left * scaleX,
+          cameraCrop.top * scaleY,
+          cameraCrop.width * scaleX,
+          cameraCrop.height * scaleY,
+          0,
+          0,
+          cropWidth,
+          cropHeight
+        );
+        drawScreenshotOverlay(context, canvas);
+        await drawMapLabelsToCanvas(context, cropWidth, cropHeight);
+
+        const screenshotBlob = await new Promise((resolve, reject) => {
+          canvas.toBlob(blob => {
+            if (blob) {
+              resolve(blob);
+            } else {
+              reject(new Error('Could not encode the screenshot.'));
+            }
+          }, 'image/png');
+        });
+        const screenshotUrl = URL.createObjectURL(screenshotBlob);
+        const downloadLink = document.createElement('a');
+        downloadLink.href = screenshotUrl;
+        downloadLink.download = `camera-snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+        window.setTimeout(() => URL.revokeObjectURL(screenshotUrl), 1000);
+        cameraStatus.textContent = 'Screenshot saved.';
+      } catch (error) {
+        cameraStatus.textContent = `Could not save screenshot: ${error.message}`;
+      } finally {
+        screenshotInProgress = false;
+        screenshotButton.disabled = !currentImageUrl;
+      }
     }
 
     function applyCameraCrop(naturalWidth, naturalHeight) {
@@ -599,21 +855,41 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       if (imageRequestInProgress || version <= currentVersion) return;
       imageRequestInProgress = true;
       const requestToken = ++imageRequestToken;
+      const requestController = new AbortController();
+      imageRequestController = requestController;
       let nextImageUrl = '';
       try {
-        const response = await fetch(`/camera/image.jpg?v=${version}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const imageBlob = await response.blob();
-        if (imageBlob.type && imageBlob.type !== 'image/jpeg') {
-          throw new Error('The server did not return a JPEG image.');
-        }
+        const imageBlob = await fetchWithTimeout(
+          `/camera/image.jpg?v=${version}`,
+          { cache: 'no-store' },
+          30000,
+          async response => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+            if (blob.type && blob.type !== 'image/jpeg') {
+              throw new Error('The server did not return a JPEG image.');
+            }
+            return blob;
+          },
+          requestController
+        );
         if (requestToken !== imageRequestToken) return;
 
         nextImageUrl = URL.createObjectURL(imageBlob);
         const decodedImage = new Image();
         await new Promise((resolve, reject) => {
-          decodedImage.onload = resolve;
-          decodedImage.onerror = () => reject(new Error('The snapshot is not a valid image.'));
+          const decodeTimeoutId = window.setTimeout(
+            () => reject(new Error('The snapshot could not be decoded in time.')),
+            10000
+          );
+          decodedImage.onload = () => {
+            window.clearTimeout(decodeTimeoutId);
+            resolve();
+          };
+          decodedImage.onerror = () => {
+            window.clearTimeout(decodeTimeoutId);
+            reject(new Error('The snapshot is not a valid image.'));
+          };
           decodedImage.src = nextImageUrl;
         });
         if (requestToken !== imageRequestToken) {
@@ -651,24 +927,40 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         if (previousImageUrl) URL.revokeObjectURL(previousImageUrl);
       } catch (error) {
         if (nextImageUrl) URL.revokeObjectURL(nextImageUrl);
-        if (requestToken === imageRequestToken && !currentImageUrl) {
+        if (requestToken === imageRequestToken) {
           cameraStatus.textContent = `Could not load camera snapshot: ${error.message}`;
         }
       } finally {
-        if (requestToken === imageRequestToken) imageRequestInProgress = false;
+        if (requestToken === imageRequestToken) {
+          imageRequestInProgress = false;
+          imageRequestController = null;
+        }
       }
     }
 
     async function refreshCameraStatus() {
       if (document.hidden || statusRequestInProgress) return null;
       statusRequestInProgress = true;
+      const requestToken = ++statusRequestToken;
+      const requestController = new AbortController();
+      statusRequestController = requestController;
       try {
-        const response = await fetch('/camera/api/status', { cache: 'no-store' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const status = await response.json();
+        const status = await fetchWithTimeout(
+          '/camera/api/status',
+          { cache: 'no-store' },
+          10000,
+          async response => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+          },
+          requestController
+        );
+        if (requestToken !== statusRequestToken) return null;
         renderCameraStatus(status);
         if (!status.image_available) {
           ++imageRequestToken;
+          imageRequestController?.abort();
+          imageRequestController = null;
           imageRequestInProgress = false;
           cameraImage.hidden = true;
           cameraPlaceholder.hidden = false;
@@ -680,18 +972,26 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           currentVersion = status.version;
           return status;
         }
+        if (currentImageUrl && status.status === 'updating') {
+          return status;
+        }
         if (status.version !== currentVersion) {
           await loadSnapshot(status.version, status.capture_epoch);
+          if (requestToken !== statusRequestToken) return null;
           if (currentVersion === status.version) {
             renderCameraStatus(status, true);
           }
         }
         return status;
       } catch (error) {
+        if (requestToken !== statusRequestToken) return null;
         cameraStatus.textContent = `Could not read camera status: ${error.message}`;
         return null;
       } finally {
-        statusRequestInProgress = false;
+        if (requestToken === statusRequestToken) {
+          statusRequestInProgress = false;
+          statusRequestController = null;
+        }
       }
     }
 
@@ -699,17 +999,34 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       refreshButton.disabled = true;
       cameraStatus.textContent = 'Requesting a fresh snapshot...';
       try {
-        const response = await fetch('/camera/api/snapshot', { method: 'POST' });
-        const result = await response.json();
+        const initialStatus = await refreshCameraStatus();
+        const startingVersion = initialStatus ? initialStatus.version : currentVersion;
+        const snapshotController = new AbortController();
+        const { response, result } = await fetchWithTimeout(
+          '/camera/api/snapshot',
+          { method: 'POST' },
+          10000,
+          async response => ({ response, result: await response.json() }),
+          snapshotController
+        );
         if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
 
         const deadline = Date.now() + 20000;
         while (Date.now() < deadline) {
           const status = await refreshCameraStatus();
-          if (status && status.status !== 'updating') {
-            if (!status.image_available) {
-              throw new Error(`Snapshot unavailable: ${status.error}`);
-            }
+          if (status?.status === 'stale') {
+            throw new Error(`Snapshot refresh failed: ${status.error}`);
+          }
+          if (status && !status.image_available && status.status !== 'updating') {
+            throw new Error(`Snapshot unavailable: ${status.error}`);
+          }
+          if (
+            status &&
+            status.image_available &&
+            status.status !== 'updating' &&
+            status.version !== startingVersion &&
+            currentVersion === status.version
+          ) {
             return;
           }
           await new Promise(resolve => window.setTimeout(resolve, 1000));
@@ -741,6 +1058,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
 
     refreshButton.addEventListener('click', requestCameraSnapshot);
+    screenshotButton.addEventListener('click', saveCameraScreenshot);
+    cameraImage.addEventListener('contextmenu', event => event.preventDefault());
     fullscreenButton.addEventListener('click', toggleFullscreen);
     fullscreenExitButton.addEventListener('click', toggleFullscreen);
     labelsButton.addEventListener('click', () => {
@@ -753,7 +1072,15 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       if (currentImageUrl && labelsEnabled) layoutMapLabels();
     });
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) refreshCameraStatus();
+      if (document.hidden) return;
+
+      ++statusRequestToken;
+      statusRequestController?.abort();
+      statusRequestInProgress = false;
+      ++imageRequestToken;
+      imageRequestController?.abort();
+      imageRequestInProgress = false;
+      refreshCameraStatus();
     });
     if (!fullscreenSupported) {
       fullscreenButton.disabled = true;
