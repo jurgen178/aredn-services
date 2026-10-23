@@ -339,9 +339,18 @@ void drawBoardDisplay()
              static_cast<unsigned long>(ESP.getFreeHeap() / 1024));
     drawDisplayLine(5, "Heap: ", metrics);
     const uint32_t storageTotal = messageBoard.totalBytes();
-    const uint32_t storagePercent = storageTotal == 0
-      ? 0
-      : static_cast<uint32_t>(static_cast<uint64_t>(messageBoard.usedBytes()) * 100 / storageTotal);
+    const uint32_t storageUsed = messageBoard.usedBytes();
+    uint32_t storagePercent = 0;
+    if (storageTotal > 0 && storageUsed > 0) {
+      const uint64_t calculatedPercent =
+          static_cast<uint64_t>(storageUsed) * 100 / storageTotal;
+      storagePercent = calculatedPercent > 100
+          ? 100
+          : static_cast<uint32_t>(calculatedPercent);
+      if (storagePercent == 0) {
+        storagePercent = 1;
+      }
+    }
     snprintf(metrics, sizeof(metrics), "%lu%%",
              static_cast<unsigned long>(storagePercent));
     drawDisplayLine(6, "Storage: ", metrics);
@@ -1787,11 +1796,6 @@ void registerRoutes()
       return;
     }
     request->send(200, "application/json; charset=utf-8", response);
-  });
-
-  server.on("/camera/api/snapshot", HTTP_POST, [](AsyncWebServerRequest* request)
-  {
-    reolinkCamera.requestSnapshot(request);
   });
 
   server.on("/api/camera/config", HTTP_GET, [](AsyncWebServerRequest* request)

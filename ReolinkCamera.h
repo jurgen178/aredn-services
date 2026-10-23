@@ -18,6 +18,9 @@ class ReolinkCamera
 {
 public:
   static constexpr uint32_t SNAPSHOT_INTERVAL_MS = 30000;
+  static constexpr uint32_t SNAPSHOT_DOWNLOAD_TIMEOUT_MS = 20000;
+  static constexpr uint32_t SNAPSHOT_BUSY_RETRY_MS = 5000;
+  static constexpr uint8_t MAX_BUSY_RETRIES = 12;
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
   static constexpr uint32_t MIN_VALID_CAPTURE_EPOCH = 1577836800UL;
 
@@ -179,37 +182,6 @@ public:
         SNAPSHOT_INTERVAL_MS / 1000,
         captureEpoch,
         pageAccessCount};
-  }
-
-  void requestSnapshot(AsyncWebServerRequest* request)
-  {
-    if (!preferencesReady_ || taskHandle_ == nullptr || configMutex_ == nullptr)
-    {
-      request->send(503, "application/json",
-                    "{\"error\":\"camera_service_unavailable\"}");
-      return;
-    }
-    if (xSemaphoreTake(configMutex_, pdMS_TO_TICKS(100)) != pdTRUE)
-    {
-      request->send(503, "application/json",
-                    "{\"error\":\"camera_config_busy\"}");
-      return;
-    }
-    const bool configured = configured_;
-    xSemaphoreGive(configMutex_);
-    if (!configured)
-    {
-      request->send(409, "application/json",
-                    "{\"error\":\"camera_not_configured\"}");
-      return;
-    }
-
-    if (state_.load(std::memory_order_acquire) != State::Connecting)
-    {
-      state_.store(State::Connecting, std::memory_order_release);
-      notifyTask();
-    }
-    request->send(202, "application/json", "{\"accepted\":true}");
   }
 
   void handleConfiguration(AsyncWebServerRequest* request) const
@@ -408,44 +380,6 @@ private:
     uint32_t readers = 0;
   };
 
-  class BoundedBufferWriter : public Stream
-  {
-  public:
-    BoundedBufferWriter(uint8_t* destination, size_t capacity)
-        : destination_(destination), capacity_(capacity) {}
-
-    size_t write(uint8_t value) override
-    {
-      return write(&value, 1);
-    }
-
-    size_t write(const uint8_t* source, size_t length) override
-    {
-      if (length > capacity_ - size_)
-      {
-        overflow_ = true;
-        return 0;
-      }
-      memcpy(destination_ + size_, source, length);
-      size_ += length;
-      return length;
-    }
-
-    int available() override { return 0; }
-    int read() override { return -1; }
-    int peek() override { return -1; }
-    void flush() override {}
-
-    size_t size() const { return size_; }
-    bool overflowed() const { return overflow_; }
-
-  private:
-    uint8_t* destination_;
-    size_t capacity_;
-    size_t size_ = 0;
-    bool overflow_ = false;
-  };
-
   enum class State : uint8_t
   {
     StorageError,
@@ -489,6 +423,7 @@ private:
   SemaphoreHandle_t snapshotMutex_ = nullptr;
   TaskHandle_t taskHandle_ = nullptr;
   int8_t activeBuffer_ = -1;
+  uint8_t busyRetries_ = 0;
   bool preferencesReady_ = false;
   bool configured_ = false;
   std::atomic<State> state_{State::NotConfigured};
@@ -526,9 +461,10 @@ private:
       }
 
       const TickType_t pollStartedAt = xTaskGetTickCount();
-      pollSnapshot(current);
+      const bool retrySoon = pollSnapshot(current);
       const TickType_t elapsed = xTaskGetTickCount() - pollStartedAt;
-      const TickType_t interval = pdMS_TO_TICKS(SNAPSHOT_INTERVAL_MS);
+      const TickType_t interval = pdMS_TO_TICKS(
+          retrySoon ? SNAPSHOT_BUSY_RETRY_MS : SNAPSHOT_INTERVAL_MS);
       if (elapsed < interval)
       {
         ulTaskNotifyTake(pdTRUE, interval - elapsed);
@@ -567,8 +503,10 @@ private:
     return matches;
   }
 
-  void pollSnapshot(const CameraSettings& settings)
+  // Returns true when the buffer was busy and the poll should be retried soon.
+  bool pollSnapshot(const CameraSettings& settings)
   {
+    const State previousState = state_.load(std::memory_order_acquire);
     state_.store(State::Connecting, std::memory_order_release);
     uint8_t targetIndex = 0;
     uint8_t* target = reserveTarget(targetIndex);
@@ -576,18 +514,27 @@ private:
     {
       const SnapshotError reserveError =
           lastError_.load(std::memory_order_acquire);
+      // A slow viewer may still be reading the spare buffer. Keep the current
+      // image and state and retry shortly; report an error only if it persists.
+      if (reserveError == SnapshotError::BufferBusy &&
+          ++busyRetries_ < MAX_BUSY_RETRIES)
+      {
+        state_.store(previousState, std::memory_order_release);
+        return true;
+      }
       fail(reserveError == SnapshotError::None
                ? SnapshotError::BufferBusy
                : reserveError);
-      return;
+      return false;
     }
+    busyRetries_ = 0;
 
     size_t imageSize = 0;
     SnapshotError error = SnapshotError::None;
     if (!fetchSnapshot(settings, target, imageSize, error))
     {
       fail(error);
-      return;
+      return false;
     }
     uint16_t imageWidth = 0;
     uint16_t imageHeight = 0;
@@ -597,12 +544,12 @@ private:
     if (xSemaphoreTake(snapshotMutex_, portMAX_DELAY) != pdTRUE)
     {
       fail(SnapshotError::BufferBusy);
-      return;
+      return false;
     }
     if (!isCurrentSettings(settings))
     {
       xSemaphoreGive(snapshotMutex_);
-      return;
+      return false;
     }
     buffers_[targetIndex].size = imageSize;
     activeBuffer_ = static_cast<int8_t>(targetIndex);
@@ -616,6 +563,7 @@ private:
     xSemaphoreGive(snapshotMutex_);
     lastError_.store(SnapshotError::None, std::memory_order_release);
     state_.store(State::Available, std::memory_order_release);
+    return false;
   }
 
   uint8_t* reserveTarget(uint8_t& index)
@@ -740,17 +688,49 @@ private:
       error = SnapshotError::SnapshotTooLarge;
       return false;
     }
-    BoundedBufferWriter writer(target, MAX_JPEG_SIZE);
-    const int copiedBytes = http.writeToStream(&writer);
+    // HTTPClient::writeToStream has no overall timeout, so a stalled camera
+    // connection could block this task forever. Read with a hard deadline.
+    WiFiClient* stream = http.getStreamPtr();
+    const uint32_t downloadStartedAt = millis();
+    size_t received = 0;
+    bool overflow = false;
+    bool timedOut = false;
+    while (contentLength < 0 || received < static_cast<size_t>(contentLength))
+    {
+      const int available = stream->available();
+      if (available > 0)
+      {
+        const size_t room = MAX_JPEG_SIZE - received;
+        if (room == 0)
+        {
+          overflow = true;
+          break;
+        }
+        const size_t chunk = std::min(static_cast<size_t>(available), room);
+        const size_t count = stream->readBytes(target + received, chunk);
+        received += count;
+        continue;
+      }
+      if (!stream->connected())
+      {
+        break;
+      }
+      if (millis() - downloadStartedAt >= SNAPSHOT_DOWNLOAD_TIMEOUT_MS)
+      {
+        timedOut = true;
+        break;
+      }
+      delay(5);
+    }
     http.end();
 
-    imageSize = writer.size();
-    if (writer.overflowed())
+    imageSize = received;
+    if (overflow)
     {
       error = SnapshotError::SnapshotTooLarge;
       return false;
     }
-    if (copiedBytes < 0 || imageSize == 0 ||
+    if (timedOut || imageSize == 0 ||
         (contentLength >= 0 && imageSize != static_cast<size_t>(contentLength)))
     {
       error = SnapshotError::SnapshotTimeout;

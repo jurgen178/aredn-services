@@ -107,7 +107,7 @@ The board supports message submission, priority filtering, search, and administr
 
 The Camera Snapshot page shows a still JPEG image, refreshed about every 30 seconds. Its preview can be expanded to fullscreen in supported browsers. The SVG overlay is drawn in each visitor's browser and remains separate from the camera JPEG.
 
-The ESP32 uses Reolink's `cmd=Snap` JPEG endpoint without a width or height override, allowing the camera to return its main-stream resolution. A background FreeRTOS task starts one snapshot request every 30 seconds, independently of viewer count; download time is part of that interval. The latest JPEG is held in two bounded PSRAM buffers so the active image can be served while the next one is downloaded. The browser checks the status endpoint every 5 seconds and downloads the JPEG only when its version changes. Refreshing pauses while the page is hidden.
+The ESP32 uses Reolink's `cmd=Snap` JPEG endpoint without a width or height override, allowing the camera to return its main-stream resolution. A background FreeRTOS task starts one snapshot request every 30 seconds, independently of viewer count; download time is part of that interval, and each download is aborted after 20 seconds so a stalled camera connection cannot block later updates. If a slow viewer still holds the spare buffer, the update is retried every 5 seconds without discarding the current image. The latest JPEG is held in two bounded PSRAM buffers so the active image can be served while the next one is downloaded. The browser checks the status endpoint every 5 seconds, downloads the JPEG only when its version changes, and shows the snapshot age reported by the device. Refreshing pauses while the page is hidden.
 
 Snapshots larger than the 2 MiB buffer limit are rejected and reported in the camera status.
 
@@ -220,3 +220,12 @@ The service uses plain HTTP and is intended for a trusted local AREDN network. I
 ```
 
 The device clock must already be valid before running the posting stage. The script requires PowerShell and network access to the device.
+
+## Articles & Write-ups
+Check out my upcoming blog articles for detailed tutorials and step-by-step guides (working drafts):
+
+- [AREDN Server for ESP32](https://bitfabrik.io/blog/index.php?id=298)
+
+- [Installing AREDN firmware on a MikroTik SXTsq Antenna](https://bitfabrik.io/blog/index.php?id=299)
+
+- [AREDN Setup for Antenna and Camera on one Ethernet cable](https://bitfabrik.io/blog/index.php?id=300)

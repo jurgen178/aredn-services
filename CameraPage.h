@@ -330,7 +330,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         <h2 id="cameraImageTitle">Latest camera image</h2>
         <div class="panel-actions">
           <p id="cameraStatus" class="status" role="status">Camera not configured</p>
-          <button id="refreshButton" class="fullscreen-button" type="button">Manual snapshot now</button>
           <button id="labelsButton" class="fullscreen-button" type="button" disabled>Hide labels</button>
           <button id="screenshotButton" class="fullscreen-button" type="button" disabled>Save screenshot</button>
           <button id="fullscreenButton" class="fullscreen-button" type="button">Fullscreen</button>
@@ -408,7 +407,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
     const cameraOverlay = document.getElementById('cameraOverlay');
     const cameraStatus = document.getElementById('cameraStatus');
-    const refreshButton = document.getElementById('refreshButton');
     const labelsButton = document.getElementById('labelsButton');
     const screenshotButton = document.getElementById('screenshotButton');
     const captureDate = document.getElementById('captureDate');
@@ -429,7 +427,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     let imageRequestController = null;
     let labelsEnabled = true;
     let latestCameraStatus = null;
-    let imageDisplayedAt = null;
+    let latestStatusReceivedAt = 0;
     let lastRenderedCameraStatus = '';
     let statusRequestInProgress = false;
     let statusRequestToken = 0;
@@ -502,17 +500,21 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       return `Camera snapshot unavailable · ${status.error}`;
     }
 
-    function renderCameraStatus(status, resetImageAge = false) {
-      latestCameraStatus = status;
-      if (status.image_available && (resetImageAge || imageDisplayedAt === null)) {
-        imageDisplayedAt = performance.now();
-      }
+    function showCameraStatus() {
+      const status = latestCameraStatus;
+      // The device reports the snapshot age; add the time since that report.
       const displayedSeconds = status.image_available
-        ? Math.floor((performance.now() - imageDisplayedAt) / 1000)
+        ? status.age_seconds + Math.floor((performance.now() - latestStatusReceivedAt) / 1000)
         : 0;
       lastRenderedCameraStatus =
         describeCameraStatus(status, displayedSeconds);
       cameraStatus.textContent = lastRenderedCameraStatus;
+    }
+
+    function renderCameraStatus(status) {
+      latestCameraStatus = status;
+      latestStatusReceivedAt = performance.now();
+      showCameraStatus();
     }
 
     function updateCameraStatusAge() {
@@ -524,7 +526,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       ) {
         return;
       }
-      renderCameraStatus(latestCameraStatus);
+      showCameraStatus();
     }
 
     function layoutMapLabels() {
@@ -867,7 +869,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
 
     async function loadSnapshot(version, captureEpoch) {
-      if (imageRequestInProgress || version <= currentVersion) return;
+      // The version restarts at 0 after a device reboot, so compare for inequality.
+      if (imageRequestInProgress || version === currentVersion) return;
       imageRequestInProgress = true;
       const requestToken = ++imageRequestToken;
       const requestController = new AbortController();
@@ -982,7 +985,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           cameraOverlay.hidden = true;
           if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
           currentImageUrl = '';
-          imageDisplayedAt = null;
           updateLabelsButton();
           currentVersion = status.version;
           return status;
@@ -993,9 +995,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         if (status.version !== currentVersion) {
           await loadSnapshot(status.version, status.capture_epoch);
           if (requestToken !== statusRequestToken) return null;
-          if (currentVersion === status.version) {
-            renderCameraStatus(status, true);
-          }
         }
         return status;
       } catch (error) {
@@ -1007,50 +1006,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           statusRequestInProgress = false;
           statusRequestController = null;
         }
-      }
-    }
-
-    async function requestCameraSnapshot() {
-      refreshButton.disabled = true;
-      cameraStatus.textContent = 'Requesting a fresh snapshot...';
-      try {
-        const initialStatus = await refreshCameraStatus();
-        const startingVersion = initialStatus ? initialStatus.version : currentVersion;
-        const snapshotController = new AbortController();
-        const { response, result } = await fetchWithTimeout(
-          '/camera/api/snapshot',
-          { method: 'POST' },
-          10000,
-          async response => ({ response, result: await response.json() }),
-          snapshotController
-        );
-        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-
-        const deadline = Date.now() + 20000;
-        while (Date.now() < deadline) {
-          const status = await refreshCameraStatus();
-          if (status?.status === 'stale') {
-            throw new Error(`Snapshot refresh failed: ${status.error}`);
-          }
-          if (status && !status.image_available && status.status !== 'updating') {
-            throw new Error(`Snapshot unavailable: ${status.error}`);
-          }
-          if (
-            status &&
-            status.image_available &&
-            status.status !== 'updating' &&
-            status.version !== startingVersion &&
-            currentVersion === status.version
-          ) {
-            return;
-          }
-          await new Promise(resolve => window.setTimeout(resolve, 1000));
-        }
-        throw new Error('Timed out waiting for the camera snapshot.');
-      } catch (error) {
-        cameraStatus.textContent = `Could not get a fresh camera snapshot: ${error.message}`;
-      } finally {
-        refreshButton.disabled = false;
       }
     }
 
@@ -1072,7 +1027,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       }
     }
 
-    refreshButton.addEventListener('click', requestCameraSnapshot);
     screenshotButton.addEventListener('click', saveCameraScreenshot);
     cameraImage.addEventListener('contextmenu', event => event.preventDefault());
     fullscreenButton.addEventListener('click', toggleFullscreen);
