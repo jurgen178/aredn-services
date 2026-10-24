@@ -332,8 +332,14 @@ void drawBoardDisplay()
     drawDisplayLine(2, "Time: ", metrics);
     snprintf(metrics, sizeof(metrics), "%lu", static_cast<unsigned long>(messageBoard.messageCount()));
     drawDisplayLine(3, "Messages: ", metrics);
-    snprintf(metrics, sizeof(metrics), "%d dBm",
-             WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0);
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      snprintf(metrics, sizeof(metrics), "%d dBm", WiFi.RSSI());
+    }
+    else
+    {
+      snprintf(metrics, sizeof(metrics), "N/A");
+    }
     drawDisplayLine(4, "WiFi: ", metrics);
     snprintf(metrics, sizeof(metrics), "%lu KB",
              static_cast<unsigned long>(ESP.getFreeHeap() / 1024));
@@ -431,7 +437,7 @@ void drawBoardDisplay()
     else
     {
       char age[16];
-      snprintf(age, sizeof(age), "%lus old",
+      snprintf(age, sizeof(age), "%lus ago",
                static_cast<unsigned long>(reolinkCamera.imageAgeSeconds()));
       drawDisplayLine(2, "Snapshot: ", age);
     }
