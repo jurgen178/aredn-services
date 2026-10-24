@@ -782,7 +782,10 @@ private:
   {
     lastError_.store(error, std::memory_order_release);
     state_.store(State::Error, std::memory_order_release);
-    Serial.printf("Camera snapshot failed: %s\n", errorName(error));
+    Serial.printf("Camera snapshot failed: %s (HTTP %d, uptime %lus)\n",
+                  errorName(error),
+                  static_cast<int>(lastHttpStatus_.load(std::memory_order_acquire)),
+                  static_cast<unsigned long>(millis() / 1000));
   }
 
   void notifyTask()

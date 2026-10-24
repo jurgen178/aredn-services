@@ -489,15 +489,15 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     function describeCameraStatus(status, displayedSeconds = 0) {
       const elapsedTime = formatElapsedTime(displayedSeconds);
       if (status.image_available) {
-        if (status.status === 'stale') return `Snapshot refresh failed · last updated ${elapsedTime} ago · ${status.error}`;
+        if (status.status === 'stale') return `Camera image is temporarily not updating · last updated ${elapsedTime} ago`;
         if (status.status === 'updating') return `Updating snapshot · last updated ${elapsedTime} ago`;
         return `Updated ${elapsedTime} ago · auto-refresh every ${status.refresh_seconds}s`;
       }
       if (status.status === 'not_configured') return 'Camera not configured';
       if (status.status === 'waiting_for_network') return 'Waiting for the server network connection';
-      if (status.status === 'storage_error') return 'Camera configuration storage is unavailable';
+      if (status.status === 'storage_error') return 'Camera is temporarily unavailable';
       if (status.status === 'updating') return 'Connecting to the camera...';
-      return `Camera snapshot unavailable · ${status.error}`;
+      return 'No camera image is available at the moment · retrying automatically';
     }
 
     function showCameraStatus() {
@@ -945,8 +945,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         if (previousImageUrl) URL.revokeObjectURL(previousImageUrl);
       } catch (error) {
         if (nextImageUrl) URL.revokeObjectURL(nextImageUrl);
+        console.error('Camera snapshot load failed:', error);
         if (requestToken === imageRequestToken) {
-          cameraStatus.textContent = `Could not load camera snapshot: ${error.message}`;
+          cameraStatus.textContent = 'The camera image could not be loaded · retrying automatically';
         }
       } finally {
         if (requestToken === imageRequestToken) {
@@ -999,7 +1000,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         return status;
       } catch (error) {
         if (requestToken !== statusRequestToken) return null;
-        cameraStatus.textContent = `Could not read camera status: ${error.message}`;
+        console.error('Camera status request failed:', error);
+        cameraStatus.textContent = 'Service temporarily unreachable · retrying automatically';
         return null;
       } finally {
         if (requestToken === statusRequestToken) {
