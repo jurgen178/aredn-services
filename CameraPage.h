@@ -329,7 +329,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       <div class="panel-head">
         <h2 id="cameraImageTitle">Latest camera image</h2>
         <div class="panel-actions">
-          <p id="cameraStatus" class="status" role="status">Camera not configured</p>
+          <p id="cameraStatus" class="status" role="status">Waiting for camera image...</p>
           <button id="labelsButton" class="fullscreen-button" type="button" disabled>Hide labels</button>
           <button id="screenshotButton" class="fullscreen-button" type="button" disabled>Save screenshot</button>
           <button id="fullscreenButton" class="fullscreen-button" type="button">Fullscreen</button>
@@ -429,6 +429,12 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     let latestCameraStatus = null;
     let latestStatusReceivedAt = 0;
     let lastRenderedCameraStatus = '';
+    // Capture time of the displayed image. Date.now() keeps counting while the
+    // computer sleeps, unlike performance.now().
+    let displayedCapturedAtMs = null;
+    let noImageSinceMs = Date.now();
+    const OUTDATED_AFTER_SECONDS = 90;
+    const NO_IMAGE_AFTER_SECONDS = 60;
     let statusRequestInProgress = false;
     let statusRequestToken = 0;
     let statusRequestController = null;
@@ -486,44 +492,36 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       return `${hours}h:${minutes}m:${seconds}s`;
     }
 
-    function describeCameraStatus(status, displayedSeconds = 0) {
-      const elapsedTime = formatElapsedTime(displayedSeconds);
-      if (status.image_available) {
-        if (status.status === 'stale') return `Camera image is temporarily not updating · last updated ${elapsedTime} ago`;
-        if (status.status === 'updating') return `Updating snapshot · last updated ${elapsedTime} ago`;
-        return `Updated ${elapsedTime} ago · auto-refresh every ${status.refresh_seconds}s`;
+    // The status text is derived only from the age of the displayed image, so
+    // short outages stay invisible and long ones show a simple notice.
+    function describeCameraStatus() {
+      const now = Date.now();
+      if (displayedCapturedAtMs !== null) {
+        const age = Math.max(0, Math.floor((now - displayedCapturedAtMs) / 1000));
+        const elapsedTime = formatElapsedTime(age);
+        return age > OUTDATED_AFTER_SECONDS
+          ? `Updated ${elapsedTime} ago · image may be outdated`
+          : `Updated ${elapsedTime} ago · auto-refresh every ${latestCameraStatus.refresh_seconds}s`;
       }
-      if (status.status === 'not_configured') return 'Camera not configured';
-      if (status.status === 'waiting_for_network') return 'Waiting for the server network connection';
-      if (status.status === 'storage_error') return 'Camera is temporarily unavailable';
-      if (status.status === 'updating') return 'Connecting to the camera...';
-      return 'No camera image is available at the moment · retrying automatically';
+      if (latestCameraStatus?.status === 'not_configured') return 'Camera not configured';
+      return now - noImageSinceMs > NO_IMAGE_AFTER_SECONDS * 1000
+        ? 'Camera image currently not available'
+        : 'Waiting for camera image...';
     }
 
     function showCameraStatus() {
-      const status = latestCameraStatus;
-      // The device reports the snapshot age; add the time since that report.
-      const displayedSeconds = status.image_available
-        ? status.age_seconds + Math.floor((performance.now() - latestStatusReceivedAt) / 1000)
-        : 0;
-      lastRenderedCameraStatus =
-        describeCameraStatus(status, displayedSeconds);
+      lastRenderedCameraStatus = describeCameraStatus();
       cameraStatus.textContent = lastRenderedCameraStatus;
     }
 
     function renderCameraStatus(status) {
       latestCameraStatus = status;
-      latestStatusReceivedAt = performance.now();
+      latestStatusReceivedAt = Date.now();
       showCameraStatus();
     }
 
     function updateCameraStatusAge() {
-      if (
-        document.hidden ||
-        !latestCameraStatus ||
-        !latestCameraStatus.image_available ||
-        cameraStatus.textContent !== lastRenderedCameraStatus
-      ) {
+      if (document.hidden || cameraStatus.textContent !== lastRenderedCameraStatus) {
         return;
       }
       showCameraStatus();
@@ -868,7 +866,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       );
     }
 
-    async function loadSnapshot(version, captureEpoch) {
+    async function loadSnapshot(version, captureEpoch, capturedAtMs) {
       // The version restarts at 0 after a device reboot, so compare for inequality.
       if (imageRequestInProgress || version === currentVersion) return;
       imageRequestInProgress = true;
@@ -922,6 +920,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         currentImageUrl = nextImageUrl;
         nextImageUrl = '';
         currentVersion = version;
+        displayedCapturedAtMs = capturedAtMs;
+        noImageSinceMs = null;
+        showCameraStatus();
         cameraImage.hidden = false;
         cameraPlaceholder.hidden = true;
         cameraOverlay.hidden = false;
@@ -946,9 +947,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       } catch (error) {
         if (nextImageUrl) URL.revokeObjectURL(nextImageUrl);
         console.error('Camera snapshot load failed:', error);
-        if (requestToken === imageRequestToken) {
-          cameraStatus.textContent = 'The camera image could not be loaded · retrying automatically';
-        }
       } finally {
         if (requestToken === imageRequestToken) {
           imageRequestInProgress = false;
@@ -986,6 +984,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           cameraOverlay.hidden = true;
           if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
           currentImageUrl = '';
+          if (displayedCapturedAtMs !== null) noImageSinceMs = Date.now();
+          displayedCapturedAtMs = null;
+          showCameraStatus();
           updateLabelsButton();
           currentVersion = status.version;
           return status;
@@ -994,14 +995,17 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           return status;
         }
         if (status.version !== currentVersion) {
-          await loadSnapshot(status.version, status.capture_epoch);
+          await loadSnapshot(
+            status.version,
+            status.capture_epoch,
+            latestStatusReceivedAt - status.age_seconds * 1000
+          );
           if (requestToken !== statusRequestToken) return null;
         }
         return status;
       } catch (error) {
         if (requestToken !== statusRequestToken) return null;
         console.error('Camera status request failed:', error);
-        cameraStatus.textContent = 'Service temporarily unreachable · retrying automatically';
         return null;
       } finally {
         if (requestToken === statusRequestToken) {
@@ -1062,6 +1066,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
     updateFullscreenButton();
     synchronizeDeviceTime();
+    showCameraStatus();
     refreshCameraStatus();
     window.setInterval(refreshCameraStatus, 5000);
     window.setInterval(updateCameraStatusAge, 1000);

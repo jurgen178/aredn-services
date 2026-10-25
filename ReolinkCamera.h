@@ -21,6 +21,8 @@ public:
   static constexpr uint32_t SNAPSHOT_DOWNLOAD_TIMEOUT_MS = 20000;
   static constexpr uint32_t SNAPSHOT_BUSY_RETRY_MS = 5000;
   static constexpr uint8_t MAX_BUSY_RETRIES = 12;
+  // Matches OUTDATED_AFTER_SECONDS in CameraPage.h.
+  static constexpr uint32_t STALE_IMAGE_SECONDS = 90;
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
   static constexpr uint32_t MIN_VALID_CAPTURE_EPOCH = 1577836800UL;
 
@@ -330,14 +332,17 @@ public:
   const char* displayStatus() const
   {
     const bool available = imageAvailable_.load(std::memory_order_acquire);
+    // With an image, only its age matters, so short failures stay invisible.
+    const char* imageState =
+        imageAgeSeconds() > STALE_IMAGE_SECONDS ? "Stale image" : "Available";
     switch (state_.load(std::memory_order_acquire))
     {
       case State::StorageError: return "Storage error";
       case State::NotConfigured: return "Not set";
       case State::Waiting: return "Network off";
-      case State::Connecting: return available ? "Updating" : "Connecting";
-      case State::Available: return "Available";
-      case State::Error: return available ? "Stale image" : "Unavailable";
+      case State::Connecting: return available ? imageState : "Connecting";
+      case State::Available: return imageState;
+      case State::Error: return available ? imageState : "Unavailable";
     }
     return "Unavailable";
   }
