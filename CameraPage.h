@@ -330,7 +330,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         <h2 id="cameraImageTitle">Latest camera image</h2>
         <div class="panel-actions">
           <p id="cameraStatus" class="status" role="status">Waiting for camera image...</p>
-          <button id="labelsButton" class="fullscreen-button" type="button" disabled>Hide labels</button>
+          <button id="labelsButton" class="fullscreen-button" type="button" disabled>Show labels</button>
           <button id="screenshotButton" class="fullscreen-button" type="button" disabled>Save screenshot</button>
           <button id="fullscreenButton" class="fullscreen-button" type="button">Fullscreen</button>
         </div>
@@ -406,6 +406,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     const mapLabels = document.getElementById('mapLabels');
     const cameraPlaceholder = document.getElementById('cameraPlaceholder');
     const cameraOverlay = document.getElementById('cameraOverlay');
+    const cameraBrandLabel = cameraOverlay.querySelector('.overlay-badge');
     const cameraStatus = document.getElementById('cameraStatus');
     const labelsButton = document.getElementById('labelsButton');
     const screenshotButton = document.getElementById('screenshotButton');
@@ -425,7 +426,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     let imageRequestInProgress = false;
     let imageRequestToken = 0;
     let imageRequestController = null;
-    let labelsEnabled = true;
+    let labelsEnabled = false;
     let latestCameraStatus = null;
     let latestStatusReceivedAt = 0;
     let lastRenderedCameraStatus = '';
@@ -618,6 +619,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       labelsButton.disabled = !currentImageUrl;
       screenshotButton.disabled = !currentImageUrl || screenshotInProgress;
       mapLabels.classList.toggle('is-visible', Boolean(currentImageUrl) && labelsEnabled);
+      cameraBrandLabel.hidden = !labelsEnabled;
       if (currentImageUrl && labelsEnabled) layoutMapLabels();
     }
 
@@ -661,30 +663,33 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       context.fillRect(0, height * 0.38, width, height * 0.62);
 
       const badge = cameraOverlay.querySelector('.overlay-badge');
-      const badgeBox = getScreenshotBox(badge, contentRect);
-      const badgeStyle = getComputedStyle(badge);
-      const badgeRadius = Number.parseFloat(badgeStyle.borderTopLeftRadius) || 0;
-      drawRoundedRectangle(
-        context,
-        badgeBox.x,
-        badgeBox.y,
-        badgeBox.width,
-        badgeBox.height,
-        badgeRadius
-      );
-      context.fillStyle = badgeStyle.backgroundColor;
-      context.fill();
-      const borderWidth = Number.parseFloat(badgeStyle.borderWidth) || 0;
-      if (borderWidth > 0) {
-        context.lineWidth = borderWidth;
-        context.strokeStyle = badgeStyle.borderColor;
-        context.stroke();
+      if (!badge.hidden) {
+        const badgeBox = getScreenshotBox(badge, contentRect);
+        const badgeStyle = getComputedStyle(badge);
+        const badgeRadius = Number.parseFloat(badgeStyle.borderTopLeftRadius) || 0;
+        drawRoundedRectangle(
+          context,
+          badgeBox.x,
+          badgeBox.y,
+          badgeBox.width,
+          badgeBox.height,
+          badgeRadius
+        );
+        context.fillStyle = badgeStyle.backgroundColor;
+        context.fill();
+        const borderWidth = Number.parseFloat(badgeStyle.borderWidth) || 0;
+        if (borderWidth > 0) {
+          context.lineWidth = borderWidth;
+          context.strokeStyle = badgeStyle.borderColor;
+          context.stroke();
+        }
       }
 
       const overlayText = cameraOverlay.querySelectorAll(
         '.overlay-badge, .overlay-kicker, .overlay-location strong, #captureDate, #captureTime'
       );
       for (const element of overlayText) {
+        if (element.hidden) continue;
         const text = element.textContent.trim();
         if (!text) continue;
         const box = getScreenshotBox(element, contentRect);
@@ -989,9 +994,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           showCameraStatus();
           updateLabelsButton();
           currentVersion = status.version;
-          return status;
-        }
-        if (currentImageUrl && status.status === 'updating') {
           return status;
         }
         if (status.version !== currentVersion) {
