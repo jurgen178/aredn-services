@@ -95,6 +95,43 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
       statusElement.classList.toggle('error', isError);
     }
 
+    function describeCameraIssue(status) {
+      if (status.status === 'not_configured') return 'Camera not configured.';
+      if (status.status === 'waiting_for_network') {
+        return 'Network unavailable; waiting to retry.';
+      }
+      if (status.status === 'storage_error') {
+        return 'Camera service temporarily unavailable.';
+      }
+
+      switch (status.error) {
+        case 'camera_unreachable':
+          return 'Camera cannot be reached; retrying.';
+        case 'camera_request_failed':
+          return 'Camera request failed; retrying.';
+        case 'snapshot_timeout':
+          return 'Camera took too long to send an image; retrying.';
+        case 'invalid_snapshot':
+          return 'Camera returned an invalid image; retrying.';
+        case 'snapshot_too_large':
+          return 'Camera image is too large; retrying.';
+        case 'psram_unavailable':
+        case 'snapshot_memory_unavailable':
+          return 'Unable to prepare a new camera image.';
+        case 'snapshot_busy':
+          return 'Camera image is busy; trying again shortly.';
+        case 'invalid_credentials':
+          return 'Camera settings need to be checked.';
+        default:
+          if (status.error && status.error !== 'none') {
+            return 'Could not get a new camera image; retrying.';
+          }
+          return status.status === 'updating'
+            ? 'Checking for a newer camera image.'
+            : '';
+      }
+    }
+
     showPassword.addEventListener('change', () => {
       passwordInput.type = showPassword.checked ? 'text' : 'password';
     });
@@ -120,12 +157,19 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
         const response = await fetch('/camera/api/status', { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const status = await response.json();
-        const httpStatus = status.http_status ? ` (HTTP ${status.http_status})` : '';
+        const issue = describeCameraIssue(status);
+        // The setup page is a diagnostic page, so keep the technical reason visible.
+        const technical = status.error && status.error !== 'none'
+          ? [status.error, status.http_status ? `camera HTTP ${status.http_status}` : '']
+            .filter(Boolean).join(', ')
+          : '';
+        const details = `${issue}${technical ? ` (${technical})` : ''}`;
         cameraState.textContent = status.image_available
-          ? `Camera ${status.status}; snapshot ${status.age_seconds}s old${httpStatus}.`
-          : `Camera ${status.status}; ${status.error}${httpStatus}.`;
+          ? `Latest image is ${status.age_seconds}s old.${details ? ` ${details}` : ''}`
+          : details || 'Waiting for camera image.';
       } catch (error) {
-        cameraState.textContent = `Camera status unavailable: ${error.message}`;
+        console.error('Camera status request failed:', error);
+        cameraState.textContent = `Camera status temporarily unavailable (${error.message}).`;
       }
     }
 

@@ -319,7 +319,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       <div>
         <p class="header-label"><a class="header-label-link" href="/" title="Open the AREDN services portal">AREDN · Bellevue Downtown View</a></p>
         <h1>Camera Snapshot</h1>
-        <p class="intro">A camera view of Bellevue Downtown.</p>
+        <p class="intro">A camera view of Bellevue Downtown, updated every 30s.</p>
         <p class="experimental-note">EXPERIMENTAL ESP32 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
       </div>
     </div>
@@ -430,12 +430,11 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     let latestCameraStatus = null;
     let latestStatusReceivedAt = 0;
     let lastRenderedCameraStatus = '';
+    // Transient reason why the image is not up to date; empty in normal operation.
+    let cameraActivity = '';
     // Capture time of the displayed image. Date.now() keeps counting while the
     // computer sleeps, unlike performance.now().
     let displayedCapturedAtMs = null;
-    let noImageSinceMs = Date.now();
-    const OUTDATED_AFTER_SECONDS = 90;
-    const NO_IMAGE_AFTER_SECONDS = 60;
     let statusRequestInProgress = false;
     let statusRequestToken = 0;
     let statusRequestController = null;
@@ -443,6 +442,25 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       document.fullscreenEnabled !== false &&
       typeof cameraFrame.requestFullscreen === 'function' &&
       typeof document.exitFullscreen === 'function';
+
+    // Diagnostic output for the browser console (F12). Plain strings only, so the
+    // lines can be copied and pasted as they are.
+    let lastLoggedNotice = null;
+    let skipLogged = false;
+    function debugLog(message) {
+      const now = new Date();
+      const time = now.toTimeString().slice(0, 8) +
+        '.' + String(now.getMilliseconds()).padStart(3, '0');
+      console.log(`[camera ${time}] ${message}`);
+    }
+
+    function describeError(error) {
+      return `${error?.name || 'Error'}: ${error?.message || error}`;
+    }
+
+    function describeBrowserState() {
+      return `tab=${document.visibilityState}, online=${navigator.onLine}`;
+    }
 
     async function fetchWithTimeout(url, options, timeoutMs, readResponse, controller) {
       const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -469,6 +487,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
       } catch (error) {
         console.error('Device clock synchronization failed:', error);
+        debugLog(`clock sync FAILED: ${describeError(error)} (${describeBrowserState()})`);
       }
     }
 
@@ -493,21 +512,67 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       return `${hours}h:${minutes}m:${seconds}s`;
     }
 
-    // The status text is derived only from the age of the displayed image, so
-    // short outages stay invisible and long ones show a simple notice.
-    function describeCameraStatus() {
-      const now = Date.now();
-      if (displayedCapturedAtMs !== null) {
-        const age = Math.max(0, Math.floor((now - displayedCapturedAtMs) / 1000));
-        const elapsedTime = formatElapsedTime(age);
-        return age > OUTDATED_AFTER_SECONDS
-          ? `Updated ${elapsedTime} ago · image may be outdated`
-          : `Updated ${elapsedTime} ago · auto-refresh every ${latestCameraStatus.refresh_seconds}s`;
+    function describeCameraIssue(status) {
+      if (!status) return '';
+      if (status.status === 'not_configured') return 'Camera not configured';
+      if (status.status === 'waiting_for_network') {
+        return 'Network unavailable; waiting to retry...';
       }
-      if (latestCameraStatus?.status === 'not_configured') return 'Camera not configured';
-      return now - noImageSinceMs > NO_IMAGE_AFTER_SECONDS * 1000
-        ? 'Camera image currently not available'
-        : 'Waiting for camera image...';
+      if (status.status === 'storage_error') {
+        return 'Camera service temporarily unavailable.';
+      }
+
+      switch (status.error) {
+        case 'camera_unreachable':
+          return 'Camera cannot be reached; retrying...';
+        case 'camera_request_failed':
+          return 'Camera request failed; retrying...';
+        case 'snapshot_timeout':
+          return 'Camera took too long to send an image; retrying...';
+        case 'invalid_snapshot':
+          return 'Camera returned an invalid image; retrying...';
+        case 'snapshot_too_large':
+          return 'Camera image is too large; retrying...';
+        case 'psram_unavailable':
+        case 'snapshot_memory_unavailable':
+          return 'Unable to prepare a new camera image.';
+        case 'snapshot_busy':
+          return 'Camera image is busy; trying again shortly...';
+        case 'invalid_credentials':
+          return 'Camera settings need to be checked.';
+        default:
+          if (status.error && status.error !== 'none') {
+            return 'Could not get a new camera image; retrying...';
+          }
+          return status.status === 'updating'
+            ? 'Checking for a newer camera image...'
+            : '';
+      }
+    }
+
+    // Show the image age. A short hiccup (for example a request that fails while
+    // the network is still reconnecting) must stay invisible, so an explanation is
+    // only added once the image is overdue by more than one missed update.
+    function describeCameraStatus() {
+      const activity = cameraActivity || describeCameraIssue(latestCameraStatus);
+      if (displayedCapturedAtMs !== null) {
+        const age = Math.max(0, Math.floor((Date.now() - displayedCapturedAtMs) / 1000));
+        const base = `Updated ${formatElapsedTime(age)} ago`;
+        const overdueAfter = 2 * (latestCameraStatus?.refresh_seconds || 30);
+        const shown = Boolean(activity) && age > overdueAfter;
+        const notice = `${activity || 'none'} (${shown ? 'shown' : 'hidden, image not overdue'})`;
+        if (notice !== lastLoggedNotice) {
+          lastLoggedNotice = notice;
+          debugLog(`notice: ${notice}, image age ${age}s`);
+        }
+        return shown ? `${base} · ${activity}` : base;
+      }
+      const notice = `${activity || 'waiting for image'} (shown, no image)`;
+      if (notice !== lastLoggedNotice) {
+        lastLoggedNotice = notice;
+        debugLog(`notice: ${notice}`);
+      }
+      return activity || 'Waiting for camera image...';
     }
 
     function showCameraStatus() {
@@ -517,6 +582,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
 
     function renderCameraStatus(status) {
       latestCameraStatus = status;
+      cameraActivity = '';
       latestStatusReceivedAt = Date.now();
       showCameraStatus();
     }
@@ -839,7 +905,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         window.setTimeout(() => URL.revokeObjectURL(screenshotUrl), 1000);
         cameraStatus.textContent = 'Screenshot saved.';
       } catch (error) {
-        cameraStatus.textContent = `Could not save screenshot: ${error.message}`;
+        console.error('Screenshot failed:', error);
+        cameraStatus.textContent = 'Could not save the screenshot.';
       } finally {
         screenshotInProgress = false;
         screenshotButton.disabled = !currentImageUrl;
@@ -879,6 +946,10 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       const requestController = new AbortController();
       imageRequestController = requestController;
       let nextImageUrl = '';
+      cameraActivity = 'Loading new image...';
+      showCameraStatus();
+      const loadStartedAt = Date.now();
+      debugLog(`image v${version}: download started`);
       try {
         const imageBlob = await fetchWithTimeout(
           `/camera/image.jpg?v=${version}`,
@@ -894,7 +965,14 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           },
           requestController
         );
-        if (requestToken !== imageRequestToken) return;
+        if (requestToken !== imageRequestToken) {
+          debugLog(`image v${version}: download result discarded (superseded)`);
+          return;
+        }
+        debugLog(
+          `image v${version}: ${imageBlob.size} bytes downloaded in ` +
+          `${Date.now() - loadStartedAt} ms`
+        );
 
         nextImageUrl = URL.createObjectURL(imageBlob);
         const decodedImage = new Image();
@@ -914,6 +992,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           decodedImage.src = nextImageUrl;
         });
         if (requestToken !== imageRequestToken) {
+          debugLog(`image v${version}: decoded image discarded (superseded)`);
           URL.revokeObjectURL(nextImageUrl);
           nextImageUrl = '';
           return;
@@ -926,8 +1005,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         nextImageUrl = '';
         currentVersion = version;
         displayedCapturedAtMs = capturedAtMs;
-        noImageSinceMs = null;
+        cameraActivity = '';
         showCameraStatus();
+        debugLog(`image v${version}: shown after ${Date.now() - loadStartedAt} ms in total`);
         cameraImage.hidden = false;
         cameraPlaceholder.hidden = true;
         cameraOverlay.hidden = false;
@@ -952,6 +1032,15 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       } catch (error) {
         if (nextImageUrl) URL.revokeObjectURL(nextImageUrl);
         console.error('Camera snapshot load failed:', error);
+        debugLog(
+          `image v${version}: FAILED after ${Date.now() - loadStartedAt} ms: ` +
+          `${describeError(error)} (${describeBrowserState()}` +
+          `${requestToken === imageRequestToken ? '' : ', superseded'})`
+        );
+        if (requestToken === imageRequestToken) {
+          cameraActivity = 'New image could not be loaded; retrying...';
+          showCameraStatus();
+        }
       } finally {
         if (requestToken === imageRequestToken) {
           imageRequestInProgress = false;
@@ -961,23 +1050,57 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
 
     async function refreshCameraStatus() {
-      if (document.hidden || statusRequestInProgress) return null;
+      if (document.hidden) return null;
+      if (statusRequestInProgress) {
+        if (!skipLogged) {
+          skipLogged = true;
+          debugLog('status: poll skipped, previous request is still running');
+        }
+        return null;
+      }
+      skipLogged = false;
       statusRequestInProgress = true;
       const requestToken = ++statusRequestToken;
       const requestController = new AbortController();
       statusRequestController = requestController;
       try {
-        const status = await fetchWithTimeout(
-          '/camera/api/status',
-          { cache: 'no-store' },
-          10000,
-          async response => {
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            return response.json();
-          },
-          requestController
+        const requestStartedAt = Date.now();
+        let status;
+        try {
+          status = await fetchWithTimeout(
+            '/camera/api/status',
+            { cache: 'no-store' },
+            10000,
+            async response => {
+              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              return response.json();
+            },
+            requestController
+          );
+        } catch (error) {
+          if (requestToken !== statusRequestToken) {
+            debugLog('status: request abandoned (superseded)');
+            return null;
+          }
+          console.error('Camera status request failed:', error);
+          debugLog(
+            `status: FAILED after ${Date.now() - requestStartedAt} ms: ` +
+            `${describeError(error)} (${describeBrowserState()})`
+          );
+          cameraActivity = 'Status temporarily unavailable; retrying...';
+          showCameraStatus();
+          return null;
+        }
+        if (requestToken !== statusRequestToken) {
+          debugLog('status: result discarded (superseded)');
+          return null;
+        }
+        debugLog(
+          `status: ok in ${Date.now() - requestStartedAt} ms, ` +
+          `state=${status.status}, error=${status.error}, camera http=${status.http_status}, ` +
+          `image=${status.image_available}, version=${status.version} ` +
+          `(shown: ${currentVersion}), age=${status.age_seconds}s`
         );
-        if (requestToken !== statusRequestToken) return null;
         renderCameraStatus(status);
         if (!status.image_available) {
           ++imageRequestToken;
@@ -989,7 +1112,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           cameraOverlay.hidden = true;
           if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
           currentImageUrl = '';
-          if (displayedCapturedAtMs !== null) noImageSinceMs = Date.now();
           displayedCapturedAtMs = null;
           showCameraStatus();
           updateLabelsButton();
@@ -1006,8 +1128,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         }
         return status;
       } catch (error) {
-        if (requestToken !== statusRequestToken) return null;
-        console.error('Camera status request failed:', error);
+        // Not a network problem: something went wrong while processing a reply.
+        console.error('Camera page error:', error);
+        debugLog(`page error while processing status: ${describeError(error)}`);
         return null;
       } finally {
         if (requestToken === statusRequestToken) {
@@ -1049,8 +1172,12 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       if (currentImageUrl && labelsEnabled) layoutMapLabels();
     });
     document.addEventListener('visibilitychange', () => {
+      debugLog(`tab became ${document.visibilityState}`);
       if (document.hidden) return;
 
+      if (statusRequestInProgress || imageRequestInProgress) {
+        debugLog('tab visible again: restarting requests that were still running');
+      }
       ++statusRequestToken;
       statusRequestController?.abort();
       statusRequestInProgress = false;
@@ -1059,6 +1186,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       imageRequestInProgress = false;
       refreshCameraStatus();
     });
+    window.addEventListener('online', () => debugLog('browser reports: network online'));
+    window.addEventListener('offline', () => debugLog('browser reports: network offline'));
     if (!fullscreenSupported) {
       fullscreenButton.disabled = true;
       fullscreenExitButton.disabled = true;
@@ -1067,6 +1196,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       fullscreenStatus.hidden = false;
     }
     updateFullscreenButton();
+    debugLog(`page started (${describeBrowserState()}); open the Console in F12 to follow these messages`);
     synchronizeDeviceTime();
     showCameraStatus();
     refreshCameraStatus();
