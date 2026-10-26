@@ -319,7 +319,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       <div>
         <p class="header-label"><a class="header-label-link" href="/" title="Open the AREDN services portal">AREDN · Bellevue Downtown View</a></p>
         <h1>Camera Snapshot</h1>
-        <p class="intro">A camera view of Bellevue Downtown, updated every 30s.</p>
+        <p class="intro">A camera view of Bellevue Downtown, updated every 30 s.</p>
         <p class="experimental-note">EXPERIMENTAL ESP32 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
       </div>
     </div>
@@ -1087,7 +1087,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
             `status: FAILED after ${Date.now() - requestStartedAt} ms: ` +
             `${describeError(error)} (${describeBrowserState()})`
           );
-          cameraActivity = 'Status temporarily unavailable; retrying...';
+          cameraActivity = 'Status unavailable; retrying...';
           showCameraStatus();
           return null;
         }
