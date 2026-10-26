@@ -500,16 +500,17 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       fullscreenExitButton.setAttribute('aria-label', 'Exit camera fullscreen');
     }
 
+    // Units are separated from the number by a space, as in the SI convention.
     function formatElapsedTime(totalSeconds) {
-      if (totalSeconds < 60) return `${totalSeconds}s`;
+      if (totalSeconds < 60) return `${totalSeconds} s`;
 
       const seconds = String(totalSeconds % 60).padStart(2, '0');
       const totalMinutes = Math.floor(totalSeconds / 60);
-      if (totalMinutes < 60) return `${totalMinutes}m:${seconds}s`;
+      if (totalMinutes < 60) return `${totalMinutes} min ${seconds} s`;
 
       const hours = Math.floor(totalMinutes / 60);
       const minutes = String(totalMinutes % 60).padStart(2, '0');
-      return `${hours}h:${minutes}m:${seconds}s`;
+      return `${hours} h ${minutes} min ${seconds} s`;
     }
 
     function describeCameraIssue(status) {
@@ -563,7 +564,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         const notice = `${activity || 'none'} (${shown ? 'shown' : 'hidden, image not overdue'})`;
         if (notice !== lastLoggedNotice) {
           lastLoggedNotice = notice;
-          debugLog(`notice: ${notice}, image age ${age}s`);
+          debugLog(`notice: ${notice}, image age ${age} s`);
         }
         return shown ? `${base} · ${activity}` : base;
       }
@@ -1099,7 +1100,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           `status: ok in ${Date.now() - requestStartedAt} ms, ` +
           `state=${status.status}, error=${status.error}, camera http=${status.http_status}, ` +
           `image=${status.image_available}, version=${status.version} ` +
-          `(shown: ${currentVersion}), age=${status.age_seconds}s`
+          `(shown: ${currentVersion}), age=${status.age_seconds} s`
         );
         renderCameraStatus(status);
         if (!status.image_available) {

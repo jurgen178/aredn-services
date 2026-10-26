@@ -173,6 +173,33 @@ void drawDisplayLine(uint8_t row, const char* label, const char* value)
   display.print(value);
 }
 
+// Compact duration for the OLED: leading zero units are omitted (12s, 3m 5s, 1h 2m 5s).
+// Seconds are dropped once days are shown to keep the value within the 21-character line.
+void formatDisplayDuration(char* buffer, size_t size, unsigned long totalSeconds)
+{
+  const unsigned long days = totalSeconds / 86400UL;
+  const unsigned long hours = (totalSeconds / 3600UL) % 24UL;
+  const unsigned long minutes = (totalSeconds / 60UL) % 60UL;
+  const unsigned long seconds = totalSeconds % 60UL;
+
+  if (days > 0)
+  {
+    snprintf(buffer, size, "%lud %luh %lum", days, hours, minutes);
+  }
+  else if (hours > 0)
+  {
+    snprintf(buffer, size, "%luh %lum %lus", hours, minutes, seconds);
+  }
+  else if (minutes > 0)
+  {
+    snprintf(buffer, size, "%lum %lus", minutes, seconds);
+  }
+  else
+  {
+    snprintf(buffer, size, "%lus", seconds);
+  }
+}
+
 void drawLargeIpLine(const char* value, int16_t y)
 {
   uint16_t lineWidth = 0;
@@ -361,10 +388,7 @@ void drawBoardDisplay()
              static_cast<unsigned long>(storagePercent));
     drawDisplayLine(6, "Storage: ", metrics);
     const uint32_t uptimeSeconds = static_cast<uint32_t>(esp_timer_get_time() / 1000000LL);
-    snprintf(metrics, sizeof(metrics), "%lud %02luh %02lum",
-             static_cast<unsigned long>(uptimeSeconds / 86400),
-             static_cast<unsigned long>((uptimeSeconds / 3600) % 24),
-             static_cast<unsigned long>((uptimeSeconds / 60) % 60));
+    formatDisplayDuration(metrics, sizeof(metrics), uptimeSeconds);
     drawDisplayLine(7, "Uptime: ", metrics);
   }
   else if (displayedPage == 1)
@@ -436,9 +460,9 @@ void drawBoardDisplay()
     }
     else
     {
-      char age[16];
-      snprintf(age, sizeof(age), "%lus ago",
-               static_cast<unsigned long>(reolinkCamera.imageAgeSeconds()));
+      char age[24];
+      formatDisplayDuration(age, sizeof(age),
+                            static_cast<unsigned long>(reolinkCamera.imageAgeSeconds()));
       drawDisplayLine(2, "Snapshot: ", age);
     }
     uint16_t imageWidth = 0;

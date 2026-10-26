@@ -95,6 +95,19 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
       statusElement.classList.toggle('error', isError);
     }
 
+    // Units are separated from the number by a space, as in the SI convention.
+    function formatElapsedTime(totalSeconds) {
+      if (totalSeconds < 60) return `${totalSeconds} s`;
+
+      const seconds = String(totalSeconds % 60).padStart(2, '0');
+      const totalMinutes = Math.floor(totalSeconds / 60);
+      if (totalMinutes < 60) return `${totalMinutes} min ${seconds} s`;
+
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = String(totalMinutes % 60).padStart(2, '0');
+      return `${hours} h ${minutes} min ${seconds} s`;
+    }
+
     function describeCameraIssue(status) {
       if (status.status === 'not_configured') return 'Camera not configured.';
       if (status.status === 'waiting_for_network') {
@@ -165,7 +178,7 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
           : '';
         const details = `${issue}${technical ? ` (${technical})` : ''}`;
         cameraState.textContent = status.image_available
-          ? `Latest image is ${status.age_seconds}s old.${details ? ` ${details}` : ''}`
+          ? `Latest image is ${formatElapsedTime(status.age_seconds)} old.${details ? ` ${details}` : ''}`
           : details || 'Waiting for camera image.';
       } catch (error) {
         console.error('Camera status request failed:', error);

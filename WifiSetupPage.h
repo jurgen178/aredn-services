@@ -189,14 +189,14 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
 
         for (let attempt = 0; attempt < 45; attempt += 1) {
           await delay(1000);
-          scanStatus.textContent = `Scanning nearby networks (${attempt + 1}s)...`;
+          scanStatus.textContent = `Scanning nearby networks (${attempt + 1} s)...`;
           let response;
           try {
             response = await fetch('/api/wifi/networks', { cache: 'no-store' });
           } catch (error) {
             if (attempt === 44) throw new Error('setup access point was temporarily unreachable');
             scanStatus.textContent =
-              `Scan running (${attempt + 1}s). Reconnecting to the setup access point...`;
+              `Scan running (${attempt + 1} s). Reconnecting to the setup access point...`;
             continue;
           }
           if (response.status === 202) continue;
@@ -210,7 +210,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
           } catch (error) {
             if (attempt === 44) throw new Error('scan result response was interrupted');
             scanStatus.textContent =
-              `Scan running (${attempt + 1}s). Reconnecting to the setup access point...`;
+              `Scan running (${attempt + 1} s). Reconnecting to the setup access point...`;
             continue;
           }
           if (result.state === 'scanning') continue;
