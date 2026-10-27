@@ -198,12 +198,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       pointer-events: none;
     }
     .camera-overlay[hidden] { display: none; }
-    .camera-overlay::after {
-      position: absolute;
-      inset: 38% 0 0;
-      background: linear-gradient(180deg, transparent, rgb(9 19 20 / 82%));
-      content: "";
-    }
     .map-labels {
       position: absolute;
       top: 0;
@@ -722,12 +716,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       const height = contentRect.height;
       context.save();
       context.scale(scaleX, scaleY);
-
-      const gradient = context.createLinearGradient(0, height * 0.38, 0, height);
-      gradient.addColorStop(0, 'rgba(9, 19, 20, 0)');
-      gradient.addColorStop(1, 'rgba(9, 19, 20, 0.82)');
-      context.fillStyle = gradient;
-      context.fillRect(0, height * 0.38, width, height * 0.62);
 
       const badge = cameraOverlay.querySelector('.overlay-badge');
       if (!badge.hidden) {
