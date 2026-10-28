@@ -458,6 +458,7 @@ private:
     uint32_t headerMs = 0;
     uint32_t downloadMs = 0;
     size_t received = 0;
+    uint32_t expectedBytes = 0;
   };
 
   struct ImageLease
@@ -643,7 +644,12 @@ private:
       const bool transferEvidence =
           (error == SnapshotError::SnapshotTimeout && metrics.received > 0) ||
           error == SnapshotError::SnapshotTooLarge;
-      adaptive_.transferFailure(millis(), metrics.totalMs, transferEvidence);
+      const bool expectedImageSize =
+          error == SnapshotError::SnapshotTooLarge ||
+          (error == SnapshotError::SnapshotTimeout && metrics.received >= 2 &&
+           target[0] == 0xFF && target[1] == 0xD8);
+      adaptive_.transferFailure(millis(), metrics.totalMs, transferEvidence,
+                                expectedImageSize ? metrics.expectedBytes : 0);
       reportAdaptive(requestLevel, metrics);
       fail(error);
       const int16_t httpStatus = lastHttpStatus_.load(std::memory_order_acquire);
@@ -682,7 +688,8 @@ private:
     version_.fetch_add(1, std::memory_order_acq_rel);
     imageAvailable_.store(true, std::memory_order_release);
     xSemaphoreGive(snapshotMutex_);
-    adaptive_.success(millis(), metrics.totalMs, metrics.headerMs, metrics.downloadMs);
+    adaptive_.success(millis(), metrics.totalMs, metrics.headerMs, metrics.downloadMs,
+                      static_cast<uint32_t>(imageSize));
     reportAdaptive(requestLevel, metrics);
     lastError_.store(SnapshotError::None, std::memory_order_release);
     state_.store(State::Available, std::memory_order_release);
@@ -838,6 +845,10 @@ private:
     }
 
     const int contentLength = http.getSize();
+    if (contentLength > 0)
+    {
+      metrics.expectedBytes = static_cast<uint32_t>(contentLength);
+    }
     if (contentLength > static_cast<int>(MAX_JPEG_SIZE))
     {
       http.end();

@@ -78,8 +78,8 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
       <button id="save" type="submit">Save camera settings</button>
       <button id="clear" class="secondary" type="button">Clear saved settings</button>
     </form>
-    <p id="status" role="status" aria-live="polite">Loading camera settings...</p>
-      <p id="camera-state" role="status">Camera status: checking...</p>
+    <p id="status" role="status" aria-live="polite">Loading camera settings.p>
+      <p id="camera-state" role="status">Camera status: checking</p>
   </main>
   <script>
     const form = document.getElementById('camera-form');
@@ -119,7 +119,7 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
 
       switch (status.error) {
         case 'camera_unreachable':
-          return 'Camera cannot be reached; retrying.';
+          return 'Waiting for camera response; retrying.';
         case 'camera_request_failed':
           return 'Camera request failed; retrying.';
         case 'snapshot_timeout':
@@ -190,7 +190,7 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
       event.preventDefault();
       saveButton.disabled = true;
       clearButton.disabled = true;
-      showStatus('Saving camera settings...');
+      showStatus('Saving camera settings.');
       try {
         const response = await fetch('/api/camera/config', {
           method: 'POST',

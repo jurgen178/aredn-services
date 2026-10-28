@@ -73,7 +73,7 @@ async function chooseRelease(file, fileName) {
   selectedRelease = null;
   flashButton.disabled = true;
   releaseDetails.hidden = true;
-  releaseStatus.textContent = 'Checking release ...';
+  releaseStatus.textContent = 'Checking release.';
   try {
     const release = await readRelease(file);
     selectedRelease = release;
@@ -90,7 +90,7 @@ async function chooseRelease(file, fileName) {
 async function loadSelectedRelease(option) {
   if (!option?.value) return;
   // Release URLs are kept relative so the same build works from any deployment directory.
-  onlineStatus.textContent = 'Loading release from the web server ...';
+  onlineStatus.textContent = 'Loading release from the web server.';
   try {
     const response = await fetch(option.value, { cache: 'no-store' });
     if (!response.ok) throw new Error(`Release could not be loaded (${response.status}).`);
@@ -139,13 +139,13 @@ flashButton.addEventListener('click', async () => {
   flashProgress.value = 0;
   flashProgress.hidden = false;
   progressStatus.hidden = false;
-  progressStatus.textContent = 'Preparing ...';
+  progressStatus.textContent = 'Preparing.';
   logElement.textContent = '';
 
   let device;
   let dfu;
   try {
-    log('Select the USB DFU device ...');
+    log('Select the USB DFU device.');
     device = await navigator.usb.requestDevice({
       filters: [{ vendorId: 0x2341, productId: 0x0070 }]
     });
@@ -164,7 +164,7 @@ flashButton.addEventListener('click', async () => {
       progressStatus.textContent = `Writing firmware: ${percent}%`;
       log(`Progress: ${done} / ${total}`);
     };
-    connectionStatus.textContent = 'Connected. Writing firmware over USB DFU ...';
+    connectionStatus.textContent = 'Connected. Writing firmware over USB DFU.';
     await dfu.open();
     try {
       // The Nano ESP32 DFU interface uses 2048-byte blocks; the manifest supplies the image.

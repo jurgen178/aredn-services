@@ -12,9 +12,7 @@ namespace camera_adaptive_detail
 
   constexpr Resolution RESOLUTIONS[] = {
       {0, 0},
-      {1920, 1440},
-      {1280, 960},
-      {960, 720},
+      {896, 672},
       {640, 480}};
 }
 
@@ -36,6 +34,8 @@ public:
     haveChange_ = false;
     headerAverageMs_ = 0;
     downloadAverageMs_ = 0;
+    bytesPerSecond_ = 0;
+    for (uint8_t i = 0; i < LEVELS; ++i) imageBytes_[i] = 0;
   }
 
   uint8_t level() const { return level_; }
@@ -71,17 +71,32 @@ public:
   }
 
   void success(uint32_t now, uint32_t totalMs,
-               uint32_t headerMs, uint32_t downloadMs)
+               uint32_t headerMs, uint32_t downloadMs, uint32_t imageBytes)
   {
     updateAverage(headerAverageMs_, headerMs);
     updateAverage(downloadAverageMs_, downloadMs);
-    const int direction = totalMs > intervalMs_ * 2 / 5 ? 1
+    updateImageSize(imageBytes);
+    uint32_t sampleRate = 0;
+    if (imageBytes > 0)
+    {
+      sampleRate = static_cast<uint32_t>(
+          static_cast<uint64_t>(imageBytes) * 1000 / (downloadMs == 0 ? 1 : downloadMs));
+      bytesPerSecond_ = bytesPerSecond_ == 0 ? sampleRate
+          : static_cast<uint32_t>((static_cast<uint64_t>(bytesPerSecond_) * 3 + sampleRate) / 4);
+    }
+    int direction = totalMs > intervalMs_ * 2 / 5 ? 1
         : totalMs < intervalMs_ / 4 ? -1 : 0;
+    if (direction < 0 && level_ > 0 && !canIncrease(now, sampleRate))
+    {
+      direction = 0;
+    }
     observe(now, totalMs, direction);
   }
 
-  void transferFailure(uint32_t now, uint32_t durationMs, bool hasEvidence)
+  void transferFailure(uint32_t now, uint32_t durationMs, bool hasEvidence,
+                       uint32_t expectedBytes = 0)
   {
+    updateImageSize(expectedBytes);
     if (hasEvidence)
     {
       observe(now, durationMs, 1);
@@ -102,6 +117,8 @@ private:
   uint32_t lastChangeMs_ = 0;
   uint32_t headerAverageMs_ = 0;
   uint32_t downloadAverageMs_ = 0;
+  uint32_t bytesPerSecond_ = 0;
+  uint32_t imageBytes_[LEVELS]{};
   bool haveObservation_ = false;
   bool haveChange_ = false;
 
@@ -114,6 +131,28 @@ private:
   {
     sample = clamp(sample, 1, 60000);
     average = average == 0 ? sample : (average * 3 + sample) / 4;
+  }
+
+  void updateImageSize(uint32_t bytes)
+  {
+    if (bytes == 0) return;
+    uint32_t& previous = imageBytes_[level_];
+    previous = previous == 0 ? bytes
+        : static_cast<uint32_t>((static_cast<uint64_t>(previous) * 3 + bytes) / 4);
+  }
+
+  bool canIncrease(uint32_t now, uint32_t sampleRate) const
+  {
+    const uint32_t targetBytes = imageBytes_[level_ - 1];
+    const uint32_t rate = sampleRate < bytesPerSecond_ ? sampleRate : bytesPerSecond_;
+    if (targetBytes > 0 && rate > 0)
+    {
+      const uint64_t predictedMs = headerAverageMs_ +
+          (static_cast<uint64_t>(targetBytes) * 1000 + rate - 1) / rate;
+      if (predictedMs < intervalMs_ / 4) return true;
+    }
+    // Recheck occasionally: an old size estimate can become stale as the scene changes.
+    return haveChange_ && now - lastChangeMs_ >= intervalMs_ * 30;
   }
 
   void observe(uint32_t now, uint32_t durationMs, int direction)

@@ -555,7 +555,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
   <div id="operationDialog" class="operation-dialog" role="dialog" aria-modal="true" aria-labelledby="operationDialogTitle" hidden>
     <div class="operation-dialog-panel">
       <div class="operation-dialog-spinner" aria-hidden="true"></div>
-      <h2 id="operationDialogTitle" class="operation-dialog-title">Working ...</h2>
+      <h2 id="operationDialogTitle" class="operation-dialog-title">Working</h2>
       <p id="operationDialogMessage" class="operation-dialog-message">The board is saving your change.</p>
     </div>
   </div>
@@ -607,7 +607,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         <h2 id="composeTitle">Write a message</h2>
       </div>
       <div id="clockSetup" class="clock-setup" hidden>
-        <p id="clockStatus" class="clock-status" role="status" aria-live="polite">Checking device time...</p>
+        <p id="clockStatus" class="clock-status" role="status" aria-live="polite">Checking device time.p>
         <form id="clockForm">
           <div class="clock-controls">
             <label for="deviceDateTime">Set device date and time</label>
@@ -652,7 +652,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           <a id="exportButton" class="board-action-button" href="/msg-board/api/messages/export.json" download="aredn-messages.json" title="Download all stored messages as JSON">Export Messages</a>
         </div>
       </div>
-      <p id="feedInfo" class="feed-info" aria-live="polite">Loading messages ...</p>
+      <p id="feedInfo" class="feed-info" aria-live="polite">Loading messages.</p>
       <form id="searchForm" class="message-search">
         <input id="searchInput" type="search" maxlength="64" placeholder="Search name or message" aria-label="Search name or message">
         <select id="priorityFilter" aria-label="Filter by priority">
@@ -796,7 +796,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
             operationDialogMessage.textContent = `Importing messages: ${totalMessages} / ${totalMessages}`;
           }
           window.setTimeout(() => {
-            operationDialogMessage.textContent = 'Import is being processed ...';
+            operationDialogMessage.textContent = 'Import is being processed.';
           }, 0);
         });
         request.addEventListener('load', () => {
@@ -866,7 +866,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
             ? `${API_BASE}/messages?limit=100`
             : `${API_BASE}/messages?before=${beforeId}&limit=100`;
           const response = await fetchBoardReadWhenAvailable(endpoint, () =>
-            operationDialogMessage.textContent = 'Waiting for the board operation to finish ...');
+            operationDialogMessage.textContent = 'Waiting for the board operation to finish.';
           if (!response.ok) {
             throw new Error('Export page failed');
           }
@@ -881,7 +881,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
             hasMore = true;
             snapshotRevision = null;
             snapshotBootId = null;
-            operationDialogMessage.textContent = 'The board changed during export. Restarting ...';
+            operationDialogMessage.textContent = 'The board changed during export. Restarting.';
             continue;
           }
           storedCount = page.c;
@@ -905,7 +905,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
             }
             beforeId = lastMessage.i;
             operationDialogMessage.textContent =
-              `Preparing ${messages.length} of ${storedCount} messages ...`;
+              `Preparing ${messages.length} of ${storedCount} messages.`;
           }
         }
         const archive = new Blob([JSON.stringify({
@@ -1605,7 +1605,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
       const file = importFile.files[0];
       importFile.value = '';
       if (!file || !window.confirm('Replace all messages with this import?')) return;
-      adminStatus.textContent = 'Importing messages ...';
+      adminStatus.textContent = 'Importing messages.';
       showOperationDialog('Importing messages', 'The board is validating and installing the imported store.');
       try {
         let totalMessages = 0;

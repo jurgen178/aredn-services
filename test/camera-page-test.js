@@ -36,6 +36,8 @@ async function main() {
   let nextTimerId = 0;
   const timers = new Map();
   const logs = [];
+  let imageWidth = 2560;
+  let imageHeight = 1920;
   let finishImage;
   let image = new Promise(resolve => { finishImage = resolve; });
   const status = {
@@ -62,7 +64,7 @@ async function main() {
     AbortController, URLSearchParams, Blob,
     URL: { createObjectURL() { return 'blob:test'; }, revokeObjectURL() {} },
     Image: class {
-      constructor() { this.naturalWidth = 640; this.naturalHeight = 480; }
+      constructor() { this.naturalWidth = imageWidth; this.naturalHeight = imageHeight; }
       set src(value) { queueMicrotask(() => this.onload()); }
     },
     fetch: async url => {
@@ -84,6 +86,7 @@ async function main() {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(statusRequests, 1);
   assert.equal(imageRequests, 1);
+  assert.doesNotMatch(elements.get('cameraStatus').textContent, /MP/);
 
   status.version = 2;
   await vm.runInContext('refreshCameraStatus()', context);
@@ -94,11 +97,19 @@ async function main() {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(vm.runInContext('currentVersion', context), 1);
   assert.equal(elements.get('cameraImage').hidden, false);
+  assert.match(elements.get('cameraStatus').textContent, /\(5MP\)/);
+  imageWidth = 896;
+  imageHeight = 672;
+  image = new Promise(resolve => { finishImage = resolve; });
   await vm.runInContext('refreshCameraStatus()', context);
   assert.equal(statusRequests, 3);
   assert.equal(imageRequests, 2, 'a newer version must be requested after the first download');
+  assert.match(elements.get('cameraStatus').textContent, /\(5MP\)/,
+    'the displayed resolution must remain unchanged while the new image loads');
+  finishImage({ type: 'image/jpeg', size: 100 });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(vm.runInContext('currentVersion', context), 2);
+  assert.match(elements.get('cameraStatus').textContent, /\(0\.6MP\)/);
   await vm.runInContext('refreshCameraStatus()', context);
   assert.equal(imageRequests, 2, 'an unchanged version must not be downloaded again');
 
@@ -112,6 +123,7 @@ async function main() {
   await vm.runInContext('refreshCameraStatus()', context);
   assert.equal(vm.runInContext('cameraActivity', context), '');
   assert.equal(vm.runInContext('currentVersion', context), 4);
+  assert.doesNotMatch(elements.get('cameraStatus').textContent, /MP/);
   finishImage({ type: 'image/jpeg', size: 100 });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(vm.runInContext('currentVersion', context), 4,
@@ -192,10 +204,13 @@ async function main() {
       }; } }
     };
   };
+  imageWidth = 640;
+  imageHeight = 480;
   runTimer(8000);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(imageRequests, 7);
   assert.equal(vm.runInContext('currentVersion', context), 5);
+  assert.match(elements.get('cameraStatus').textContent, /\(0\.3MP\)/);
   assert.equal(vm.runInContext('imageRetryDelayMs', context), 2000);
   console.log('camera page tests passed');
 }

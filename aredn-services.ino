@@ -540,7 +540,7 @@ void initializeDisplay()
   Wire.begin();
   Serial.println("I2C initialized");
 
-  Serial.println("Scanning I2C bus...");
+  Serial.println("Scanning I2C bus.");
   Wire.beginTransmission(OLED_ADDRESS);
   const uint8_t error = Wire.endTransmission();
 
@@ -569,7 +569,7 @@ void initializeDisplay()
   display.setCursor(0, 0);
   display.println("AREDN MESSAGE BOARD");
   display.println();
-  display.println("STARTING SERVICE ...");
+  display.println("STARTING SERVICE");
   display.display();
 }
 

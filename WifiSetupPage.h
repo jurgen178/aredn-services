@@ -68,21 +68,21 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
     <p>The device scans for nearby networks automatically. Select yours from the list or enter a hidden network name manually.</p>
     <section class="current-connection" aria-labelledby="current-connection-heading">
       <h2 id="current-connection-heading">Current connection</h2>
-      <p id="status" role="status" aria-live="polite">Checking device status...</p>
+      <p id="status" role="status" aria-live="polite">Checking device status.</p>
       <dl class="connection-details">
         <div>
           <dt>Router Wi-Fi address</dt>
-          <dd id="router-address">Checking...</dd>
+          <dd id="router-address">Checking</dd>
         </div>
         <div>
           <dt>Setup access point address</dt>
-          <dd id="setup-address">Checking...</dd>
+          <dd id="setup-address">Checking</dd>
         </div>
       </dl>
     </section>
     <label for="networks">Available Wi-Fi networks</label>
     <select id="networks">
-      <option value="">Choose a network...</option>
+      <option value="">Choose a network</option>
       <option value="__scan__">Scan for networks</option>
     </select>
     <p id="scan-status" role="status" aria-live="polite"></p>
@@ -136,7 +136,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
         const connected = status.state === 'connected' && status.wifi_connected;
         routerAddressElement.textContent = connected
           ? status.sta_ip
-          : status.state === 'connecting' ? 'Connecting...' : 'Not connected';
+          : status.state === 'connecting' ? 'Connecting.' : 'Not connected.';
         setupAddressElement.textContent = status.ap_ip || 'Unavailable';
         if (status.state === 'connected' && status.wifi_connected) {
           checkingConnection = false;
@@ -145,7 +145,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
         } else if (status.state === 'connecting') {
           checkingConnection = true;
           submitButton.disabled = true;
-          showStatus('Trying to connect to the Wi-Fi network...');
+          showStatus('Trying to connect to the Wi-Fi network.');
         } else if (status.state === 'failed') {
           checkingConnection = false;
           submitButton.disabled = scanningNetworks;
@@ -179,7 +179,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
       if (scanningNetworks) return;
       scanningNetworks = true;
       submitButton.disabled = true;
-      scanStatus.textContent = 'Scanning nearby networks...';
+      scanStatus.textContent = 'Scanning nearby networks.';
       try {
         const startResponse = await fetch('/api/wifi/scan', { method: 'POST' });
         if (!startResponse.ok) {
@@ -189,14 +189,14 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
 
         for (let attempt = 0; attempt < 45; attempt += 1) {
           await delay(1000);
-          scanStatus.textContent = `Scanning nearby networks (${attempt + 1} s)...`;
+          scanStatus.textContent = `Scanning nearby networks (${attempt + 1} s).`;
           let response;
           try {
             response = await fetch('/api/wifi/networks', { cache: 'no-store' });
           } catch (error) {
             if (attempt === 44) throw new Error('setup access point was temporarily unreachable');
             scanStatus.textContent =
-              `Scan running (${attempt + 1} s). Reconnecting to the setup access point...`;
+              `Scan running (${attempt + 1} s). Reconnecting to the setup access point.`;
             continue;
           }
           if (response.status === 202) continue;
@@ -210,7 +210,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
           } catch (error) {
             if (attempt === 44) throw new Error('scan result response was interrupted');
             scanStatus.textContent =
-              `Scan running (${attempt + 1} s). Reconnecting to the setup access point...`;
+              `Scan running (${attempt + 1} s). Reconnecting to the setup access point.`;
             continue;
           }
           if (result.state === 'scanning') continue;
@@ -227,7 +227,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
           const visibleNetworks = [...strongestNetworks.values()]
             .sort((left, right) => right.rssi - left.rssi);
           const options = [
-            new Option('Choose a network...', '')
+            new Option('Choose a network', '')
           ];
           for (const [index, network] of visibleNetworks.entries()) {
             const security = network.secure ? 'secured' : 'open';
@@ -282,7 +282,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
     document.getElementById('wifi-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       submitButton.disabled = true;
-      showStatus('Sending Wi-Fi details...');
+      showStatus('Sending Wi-Fi details.');
       try {
         const response = await fetch('/api/wifi/config', {
           method: 'POST',
@@ -294,7 +294,7 @@ static const char WIFI_SETUP_PAGE[] PROGMEM = R"AREDNWIFI(
           throw new Error(result.error || 'configuration request failed');
         }
         checkingConnection = true;
-        showStatus('Wi-Fi details received. Connecting...');
+        showStatus('Wi-Fi details received. Connecting.');
         passwordInput.value = '';
         await refreshStatus();
       } catch (error) {
