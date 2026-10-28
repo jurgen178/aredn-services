@@ -427,6 +427,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     let imageRequestInProgress = false;
     let imageRequestToken = 0;
     let imageRequestController = null;
+    let imageRetryTimer = null;
+    let imageRetryDelayMs = 2000;
+    let lastImageDownloadMs = 0;
     let labelsEnabled = false;
     let latestCameraStatus = null;
     let latestStatusReceivedAt = 0;
@@ -475,6 +478,72 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         throw error;
       } finally {
         window.clearTimeout(timeoutId);
+      }
+    }
+
+    async function fetchSnapshotBlob(url, controller, progress) {
+      const idleTimeoutMs = Math.max(30000, Math.min(60000, lastImageDownloadMs * 2));
+      let timeoutReason = '';
+      let idleTimer;
+      function resetIdleTimer() {
+        window.clearTimeout(idleTimer);
+        idleTimer = window.setTimeout(() => {
+          timeoutReason = `No image data received for ${idleTimeoutMs / 1000} seconds.`;
+          controller.abort();
+        }, idleTimeoutMs);
+      }
+      const totalTimer = window.setTimeout(() => {
+        timeoutReason = 'Image download exceeded the 120 second safety limit.';
+        controller.abort();
+      }, 120000);
+      resetIdleTimer();
+      try {
+        const response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const contentLength = response.headers?.get('Content-Length');
+        if (contentLength && /^\d+$/.test(contentLength)) {
+          const parsed = Number(contentLength);
+          if (Number.isSafeInteger(parsed)) progress.expected = parsed;
+        }
+        const contentType = response.headers?.get('Content-Type')?.split(';')[0].trim().toLowerCase();
+        if (contentType && contentType !== 'image/jpeg') {
+          throw new Error('The server did not return a JPEG image.');
+        }
+        const contentEncoding = response.headers?.get('Content-Encoding')?.trim().toLowerCase();
+        function checkLength() {
+          if (progress.expected !== null && (!contentEncoding || contentEncoding === 'identity') &&
+              progress.received !== progress.expected) {
+            throw new Error(`Incomplete image: received ${progress.received} of ${progress.expected} bytes.`);
+          }
+        }
+        if (!response.body?.getReader) {
+          const blob = await response.blob();
+          progress.received = blob.size;
+          if (blob.type && blob.type !== 'image/jpeg') {
+            throw new Error('The server did not return a JPEG image.');
+          }
+          checkLength();
+          return blob;
+        }
+        const reader = response.body.getReader();
+        const chunks = [];
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value.byteLength > 0) {
+            chunks.push(value);
+            progress.received += value.byteLength;
+            resetIdleTimer();
+          }
+        }
+        checkLength();
+        return new Blob(chunks, { type: 'image/jpeg' });
+      } catch (error) {
+        if (timeoutReason) throw new Error(timeoutReason);
+        throw error;
+      } finally {
+        window.clearTimeout(idleTimer);
+        window.clearTimeout(totalTimer);
       }
     }
 
@@ -924,9 +993,33 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       );
     }
 
+    function clearImageRetry() {
+      if (imageRetryTimer !== null) window.clearTimeout(imageRetryTimer);
+      imageRetryTimer = null;
+    }
+
+    function scheduleImageRetry() {
+      if (document.hidden || imageRetryTimer !== null ||
+          !latestCameraStatus?.image_available ||
+          latestCameraStatus.version === currentVersion) return;
+      const delay = imageRetryDelayMs;
+      imageRetryDelayMs = Math.min(imageRetryDelayMs * 2, 30000);
+      debugLog(`image: retry scheduled in ${delay / 1000} s`);
+      imageRetryTimer = window.setTimeout(() => {
+        imageRetryTimer = null;
+        if (document.hidden || !latestCameraStatus?.image_available) return;
+        loadSnapshot(
+          latestCameraStatus.version,
+          latestCameraStatus.capture_epoch,
+          latestStatusReceivedAt - latestCameraStatus.age_seconds * 1000
+        );
+      }, delay);
+    }
+
     async function loadSnapshot(version, captureEpoch, capturedAtMs) {
       // The version restarts at 0 after a device reboot, so compare for inequality.
       if (imageRequestInProgress || version === currentVersion) return;
+      clearImageRetry();
       imageRequestInProgress = true;
       const requestToken = ++imageRequestToken;
       const requestController = new AbortController();
@@ -935,21 +1028,13 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       cameraActivity = 'Loading new image...';
       showCameraStatus();
       const loadStartedAt = Date.now();
+      const progress = { received: 0, expected: null };
       debugLog(`image v${version}: download started`);
       try {
-        const imageBlob = await fetchWithTimeout(
+        const imageBlob = await fetchSnapshotBlob(
           `/camera/image.jpg?v=${version}`,
-          { cache: 'no-store' },
-          30000,
-          async response => {
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const blob = await response.blob();
-            if (blob.type && blob.type !== 'image/jpeg') {
-              throw new Error('The server did not return a JPEG image.');
-            }
-            return blob;
-          },
-          requestController
+          requestController,
+          progress
         );
         if (requestToken !== imageRequestToken) {
           debugLog(`image v${version}: download result discarded (superseded)`);
@@ -959,6 +1044,10 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           `image v${version}: ${imageBlob.size} bytes downloaded in ` +
           `${Date.now() - loadStartedAt} ms`
         );
+        const downloadMs = Date.now() - loadStartedAt;
+        lastImageDownloadMs = lastImageDownloadMs
+          ? Math.round((lastImageDownloadMs * 3 + downloadMs) / 4)
+          : downloadMs;
 
         nextImageUrl = URL.createObjectURL(imageBlob);
         const decodedImage = new Image();
@@ -990,6 +1079,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         currentImageUrl = nextImageUrl;
         nextImageUrl = '';
         currentVersion = version;
+        imageRetryDelayMs = 2000;
+        clearImageRetry();
         displayedCapturedAtMs = capturedAtMs;
         cameraActivity = '';
         showCameraStatus();
@@ -1021,11 +1112,13 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         debugLog(
           `image v${version}: FAILED after ${Date.now() - loadStartedAt} ms: ` +
           `${describeError(error)} (${describeBrowserState()}` +
-          `${requestToken === imageRequestToken ? '' : ', superseded'})`
+          `${requestToken === imageRequestToken ? '' : ', superseded'}), ` +
+          `received ${progress.received}/${progress.expected ?? '?'} bytes`
         );
         if (requestToken === imageRequestToken) {
           cameraActivity = 'New image could not be loaded; retrying...';
           showCameraStatus();
+          scheduleImageRetry();
         }
       } finally {
         if (requestToken === imageRequestToken) {
@@ -1091,6 +1184,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         );
         renderCameraStatus(status);
         if (!status.image_available) {
+          clearImageRetry();
+          imageRetryDelayMs = 2000;
           ++imageRequestToken;
           imageRequestController?.abort();
           imageRequestController = null;
@@ -1107,7 +1202,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           currentVersion = status.version;
           return status;
         }
-        if (status.version !== currentVersion) {
+        if (status.version !== currentVersion && imageRetryTimer === null) {
           loadSnapshot(
             status.version,
             status.capture_epoch,
@@ -1161,7 +1256,10 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     });
     document.addEventListener('visibilitychange', () => {
       debugLog(`tab became ${document.visibilityState}`);
-      if (document.hidden) return;
+      if (document.hidden) {
+        clearImageRetry();
+        return;
+      }
 
       if (statusRequestInProgress || imageRequestInProgress) {
         debugLog('tab visible again: restarting requests that were still running');
@@ -1173,6 +1271,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       imageRequestController?.abort();
       imageRequestInProgress = false;
       refreshCameraStatus();
+      scheduleImageRetry();
     });
     window.addEventListener('online', () => debugLog('browser reports: network online'));
     window.addEventListener('offline', () => debugLog('browser reports: network offline'));

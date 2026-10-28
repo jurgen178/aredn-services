@@ -21,6 +21,7 @@ class ReolinkCamera
 public:
   static constexpr uint32_t SNAPSHOT_INTERVAL_MS = 30000;
   static constexpr uint32_t SNAPSHOT_BUSY_RETRY_MS = 5000;
+  static constexpr uint32_t IMAGE_ACK_TIMEOUT_MS = 15000;
   static constexpr uint8_t MAX_BUSY_RETRIES = 12;
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
   static constexpr uint32_t MIN_VALID_CAPTURE_EPOCH = 1577836800UL;
@@ -125,7 +126,7 @@ public:
     xSemaphoreGive(snapshotMutex_);
 
     std::shared_ptr<ImageLease> lease(
-        new (std::nothrow) ImageLease(this, index));
+        new (std::nothrow) ImageLease(this, index, imageSize));
     if (!lease)
     {
       releaseReader(index);
@@ -146,6 +147,7 @@ public:
           }
           const size_t count = std::min(maxLength, imageSize - offset);
           memcpy(output, imageData + offset, count);
+          lease->provided = offset + count;
           return count;
         });
     if (response == nullptr)
@@ -156,6 +158,11 @@ public:
     response->addHeader("Cache-Control", "no-store");
     response->addHeader("X-Camera-Refresh-Seconds",
                         String(SNAPSHOT_INTERVAL_MS / 1000));
+    const uint32_t ackTimeout = request->client()->getAckTimeout();
+    if (ackTimeout != 0 && ackTimeout < IMAGE_ACK_TIMEOUT_MS)
+    {
+      request->client()->setAckTimeout(IMAGE_ACK_TIMEOUT_MS);
+    }
     request->send(response);
   }
 
@@ -455,14 +462,21 @@ private:
 
   struct ImageLease
   {
-    ImageLease(ReolinkCamera* owner, uint8_t bufferIndex)
-        : camera(owner), index(bufferIndex) {}
+    ImageLease(ReolinkCamera* owner, uint8_t bufferIndex, size_t imageSize)
+        : camera(owner), index(bufferIndex), size(imageSize), startedAt(millis()) {}
     ~ImageLease()
     {
+      Serial.printf("Camera image transfer ended: %lu/%lu bytes supplied to HTTP response in %lu ms\n",
+                    static_cast<unsigned long>(provided),
+                    static_cast<unsigned long>(size),
+                    static_cast<unsigned long>(millis() - startedAt));
       camera->releaseReader(index);
     }
     ReolinkCamera* camera;
     uint8_t index;
+    size_t size;
+    uint32_t startedAt;
+    size_t provided = 0;
   };
 
   Preferences preferences_;

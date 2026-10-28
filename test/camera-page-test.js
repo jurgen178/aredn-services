@@ -31,6 +31,11 @@ async function main() {
   };
   let statusRequests = 0;
   let imageRequests = 0;
+  let statusFails = false;
+  let imageResponseFactory = null;
+  let nextTimerId = 0;
+  const timers = new Map();
+  const logs = [];
   let finishImage;
   let image = new Promise(resolve => { finishImage = resolve; });
   const status = {
@@ -42,10 +47,19 @@ async function main() {
   };
   const context = vm.createContext({
     document,
-    window: { setTimeout() { return 1; }, clearTimeout() {}, setInterval() {}, addEventListener() {} },
+    window: {
+      setTimeout(callback, delay) {
+        const id = ++nextTimerId;
+        timers.set(id, { callback, delay });
+        return id;
+      },
+      clearTimeout(id) { timers.delete(id); },
+      setInterval() {},
+      addEventListener() {}
+    },
     navigator: { onLine: true },
-    console: { log() {}, error(...args) { throw new Error(args.join(' ')); } },
-    AbortController, URLSearchParams,
+    console: { log(message) { logs.push(message); }, error() {} },
+    AbortController, URLSearchParams, Blob,
     URL: { createObjectURL() { return 'blob:test'; }, revokeObjectURL() {} },
     Image: class {
       constructor() { this.naturalWidth = 640; this.naturalHeight = 480; }
@@ -55,10 +69,12 @@ async function main() {
       if (url === '/api/time/sync') return { ok: true };
       if (url === '/camera/api/status') {
         statusRequests++;
+        if (statusFails) throw new TypeError('Status unavailable');
         return { ok: true, json: async () => ({ ...status }) };
       }
       if (url.startsWith('/camera/image.jpg')) {
         imageRequests++;
+        if (imageResponseFactory) return imageResponseFactory();
         return { ok: true, blob: () => image };
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -100,6 +116,87 @@ async function main() {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(vm.runInContext('currentVersion', context), 4,
     'a superseded image must not replace the unavailable status');
+
+  const partialResponse = () => {
+    let reads = 0;
+    return {
+      ok: true,
+      headers: { get(name) {
+        return name === 'Content-Length' ? '500' : name === 'Content-Type' ? 'image/jpeg' : null;
+      } },
+      body: { getReader() { return {
+        async read() {
+          if (reads++ === 0) return { done: false, value: new Uint8Array(100) };
+          throw new TypeError('Connection closed before the full response');
+        }
+      }; } }
+    };
+  };
+  const runTimer = delay => {
+    const entry = [...timers.entries()].find(([, timer]) => timer.delay === delay);
+    assert.ok(entry, `expected a ${delay} ms retry timer`);
+    timers.delete(entry[0]);
+    entry[1].callback();
+  };
+  imageResponseFactory = partialResponse;
+  status.image_available = true;
+  status.status = 'available';
+  status.version = 5;
+  await vm.runInContext('refreshCameraStatus()', context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(imageRequests, 4);
+  assert.ok(logs.some(message => message.includes('received 100/500 bytes')));
+  assert.equal(vm.runInContext('currentVersion', context), 4,
+    'a truncated image must not replace the displayed version');
+
+  statusFails = true;
+  await vm.runInContext('refreshCameraStatus()', context);
+  runTimer(2000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(imageRequests, 5, 'image retry must not depend on a successful status request');
+  imageResponseFactory = () => {
+    let reads = 0;
+    return {
+      ok: true,
+      headers: { get(name) {
+        return name === 'Content-Length' ? '500' : name === 'Content-Type' ? 'image/jpeg' : null;
+      } },
+      body: { getReader() { return {
+        async read() {
+          return reads++ === 0
+            ? { done: false, value: new Uint8Array(100) }
+            : { done: true };
+        }
+      }; } }
+    };
+  };
+  runTimer(4000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(imageRequests, 6);
+  assert.equal(vm.runInContext('currentVersion', context), 4,
+    'a response shorter than Content-Length must not replace the displayed image');
+  assert.ok(logs.some(message => message.includes('Incomplete image: received 100 of 500 bytes')));
+  imageResponseFactory = () => {
+    let reads = 0;
+    return {
+      ok: true,
+      headers: { get(name) {
+        return name === 'Content-Length' ? '100' : name === 'Content-Type' ? 'image/jpeg' : null;
+      } },
+      body: { getReader() { return {
+        async read() {
+          return reads++ === 0
+            ? { done: false, value: new Uint8Array(100) }
+            : { done: true };
+        }
+      }; } }
+    };
+  };
+  runTimer(8000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(imageRequests, 7);
+  assert.equal(vm.runInContext('currentVersion', context), 5);
+  assert.equal(vm.runInContext('imageRetryDelayMs', context), 2000);
   console.log('camera page tests passed');
 }
 

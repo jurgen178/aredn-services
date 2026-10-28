@@ -98,6 +98,9 @@ std::atomic<bool> wifiCredentialsSaved{false};
 std::atomic<bool> wifiConfigRequestPending{false};
 std::atomic<uint8_t> wifiProvisionState{0};
 std::atomic<bool> wifiScanActive{false};
+std::atomic<uint32_t> wifiDisconnectCount{0};
+std::atomic<uint32_t> wifiDisconnectReason{0};
+std::atomic<uint32_t> wifiDisconnectAtMs{0};
 // Client samples are protected because HTTP handlers may run concurrently.
 SemaphoreHandle_t clientTimeMutex = nullptr;
 // The admin session and login throttling state below are protected by adminMutex.
@@ -2754,6 +2757,12 @@ void setup()
   WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(false);
+  WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t info)
+  {
+    wifiDisconnectReason.store(info.wifi_sta_disconnected.reason, std::memory_order_relaxed);
+    wifiDisconnectAtMs.store(millis(), std::memory_order_relaxed);
+    wifiDisconnectCount.fetch_add(1, std::memory_order_release);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   const IPAddress setupIp(192, 168, 4, 1);
   const IPAddress setupGateway(192, 168, 4, 1);
   const IPAddress setupSubnet(255, 255, 255, 0);
@@ -2831,6 +2840,19 @@ void loop()
 {
   const uint32_t now = millis();
   bool connected = WiFi.status() == WL_CONNECTED;
+  static uint32_t loggedDisconnectCount = 0;
+  const uint32_t disconnectCount = wifiDisconnectCount.load(std::memory_order_acquire);
+  if (disconnectCount != loggedDisconnectCount)
+  {
+    loggedDisconnectCount = disconnectCount;
+    Serial.printf("Wi-Fi disconnect event: reason %lu, uptime %lu ms, count %lu, "
+                  "free heap %lu bytes, status %d\n",
+                  static_cast<unsigned long>(wifiDisconnectReason.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long>(wifiDisconnectAtMs.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long>(disconnectCount),
+                  static_cast<unsigned long>(ESP.getFreeHeap()),
+                  static_cast<int>(WiFi.status()));
+  }
 
   if (wifiConfigRequestPending.exchange(false, std::memory_order_acq_rel))
   {

@@ -113,6 +113,8 @@ Connection and transfer timeouts adapt to recent successful transfers within saf
 
 The resolution controller measures the camera-to-ESP32 transfer, not individual viewers' connections. The camera status API and browser console report the next requested resolution level (0 is default, 1–4 are the sizes above), the last camera fetch duration and byte count, and the next download timeout. The serial console also logs the request level and separate header and download durations. Actual JPEG dimensions depend on the camera's response to the requested size.
 
+The browser retries an interrupted cached-image download even if the status endpoint is temporarily unavailable, using a bounded backoff. It reports received and expected byte counts on failure and uses a progress timeout plus an overall safety limit. For image responses, the server allows a longer TCP acknowledgement timeout than the library default; the serial log reports how many bytes were supplied to the HTTP response, not how many the browser received. Wi-Fi station disconnect events are logged with their reason code, uptime, count, and free heap, including intentional disconnects during Wi-Fi reconfiguration.
+
 Snapshots larger than the 2 MiB buffer limit are rejected and reported in the camera status.
 
 ### Radio Tools
