@@ -584,7 +584,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
 
     function renderCameraStatus(status) {
       latestCameraStatus = status;
-      cameraActivity = '';
+      cameraActivity = imageRequestInProgress ? 'Loading new image...' : '';
       latestStatusReceivedAt = Date.now();
       showCameraStatus();
     }
@@ -1085,7 +1085,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           `status: ok in ${Date.now() - requestStartedAt} ms, ` +
           `state=${status.status}, error=${status.error}, camera http=${status.http_status}, ` +
           `image=${status.image_available}, version=${status.version} ` +
-          `(shown: ${currentVersion}), age=${status.age_seconds} s`
+          `(shown: ${currentVersion}), age=${status.age_seconds} s, ` +
+          `next level=${status.resolution_level}, camera fetch=${status.last_fetch_ms} ms/` +
+          `${status.last_fetch_bytes} bytes, download timeout=${status.download_timeout_ms} ms`
         );
         renderCameraStatus(status);
         if (!status.image_available) {
@@ -1099,18 +1101,18 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           if (currentImageUrl) URL.revokeObjectURL(currentImageUrl);
           currentImageUrl = '';
           displayedCapturedAtMs = null;
+          cameraActivity = '';
           showCameraStatus();
           updateLabelsButton();
           currentVersion = status.version;
           return status;
         }
         if (status.version !== currentVersion) {
-          await loadSnapshot(
+          loadSnapshot(
             status.version,
             status.capture_epoch,
             latestStatusReceivedAt - status.age_seconds * 1000
           );
-          if (requestToken !== statusRequestToken) return null;
         }
         return status;
       } catch (error) {

@@ -479,10 +479,53 @@ void drawBoardDisplay()
       strlcpy(imageDimensions, "Unknown", sizeof(imageDimensions));
     }
     drawDisplayLine(3, "Size: ", imageDimensions);
-    drawDisplayLine(4, "Refresh: ", "30 seconds");
-    drawDisplayLine(5, "", "Bellevue Downtown");
-    drawDisplayLine(6, "Overlay: ", "Browser only");
-    drawDisplayLine(7, "Setup: ", "Use setup AP");
+    char value[22];
+    uint32_t refreshIntervalMs = 0;
+    if (reolinkCamera.lastRefreshInterval(refreshIntervalMs))
+    {
+      formatDisplayDuration(value, sizeof(value), refreshIntervalMs / 1000);
+    }
+    else
+    {
+      strlcpy(value, "Waiting", sizeof(value));
+    }
+    drawDisplayLine(4, "Refresh: ", value);
+
+    CameraAdaptive::Resolution nextResolution{};
+    if (!reolinkCamera.nextRequestedResolution(nextResolution))
+    {
+      strlcpy(value, "Unknown", sizeof(value));
+    }
+    else if (nextResolution.width == 0 && nextResolution.height == 0)
+    {
+      strlcpy(value, "Camera default", sizeof(value));
+    }
+    else
+    {
+      snprintf(value, sizeof(value), "%ux%u",
+               static_cast<unsigned>(nextResolution.width),
+               static_cast<unsigned>(nextResolution.height));
+    }
+    drawDisplayLine(5, "Next: ", value);
+
+    uint32_t fetchMs = 0;
+    uint32_t fetchBytes = 0;
+    if (reolinkCamera.lastFetch(fetchMs, fetchBytes))
+    {
+      snprintf(value, sizeof(value), "%lu.%lus",
+               static_cast<unsigned long>(fetchMs / 1000),
+               static_cast<unsigned long>((fetchMs % 1000) / 100));
+      drawDisplayLine(6, "Fetch: ", value);
+      snprintf(value, sizeof(value), "%lu.%lu KiB",
+               static_cast<unsigned long>(fetchBytes / 1024),
+               static_cast<unsigned long>((fetchBytes % 1024) * 10 / 1024));
+      drawDisplayLine(7, "Data: ", value);
+    }
+    else
+    {
+      drawDisplayLine(6, "Fetch: ", "Waiting");
+      drawDisplayLine(7, "Data: ", "Waiting");
+    }
   }
 
   display.display();
@@ -1499,7 +1542,11 @@ bool formatCameraStatusJson(const ReolinkCamera::StatusSnapshot& status,
       "%*s\"age_seconds\": %lu,\n"
       "%*s\"refresh_seconds\": %lu,\n"
       "%*s\"capture_epoch\": %lu,\n"
-      "%*s\"access_count\": %lu\n"
+      "%*s\"access_count\": %lu,\n"
+      "%*s\"resolution_level\": %u,\n"
+      "%*s\"last_fetch_ms\": %lu,\n"
+      "%*s\"last_fetch_bytes\": %lu,\n"
+      "%*s\"download_timeout_ms\": %lu\n"
       "%*s}",
       fieldIndent, "",
       status.status,
@@ -1519,6 +1566,14 @@ bool formatCameraStatusJson(const ReolinkCamera::StatusSnapshot& status,
       static_cast<unsigned long>(status.captureEpoch),
       fieldIndent, "",
       static_cast<unsigned long>(status.accessCount),
+      fieldIndent, "",
+      static_cast<unsigned>(status.resolutionLevel),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.lastFetchMs),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.lastFetchBytes),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.downloadTimeoutMs),
       indent, "");
   return written >= 0 && static_cast<size_t>(written) < responseSize;
 }
@@ -1818,7 +1873,7 @@ void registerRoutes()
     const ReolinkCamera::StatusSnapshot status =
         reolinkCamera.statusSnapshot(
             cameraPageAccessCount.load(std::memory_order_relaxed));
-    char response[448];
+    char response[512];
     if (!formatCameraStatusJson(status, response, sizeof(response), 0))
     {
       request->send(500, "application/json",
@@ -2459,7 +2514,7 @@ void registerRoutes()
     const uint32_t toolsAccessCount =
         toolsPageAccessCount.load(std::memory_order_relaxed);
     char boardStatusJson[512];
-    char cameraStatusJson[448];
+    char cameraStatusJson[512];
     char toolsStatusJson[96];
     char response[2048];
     if (!formatMessageBoardStatusJson(
