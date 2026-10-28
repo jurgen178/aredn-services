@@ -265,9 +265,16 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
     }
     .overlay-location, .overlay-capture {
       display: grid;
-      gap: 4px;
+      gap: 3px;
       min-width: 0;
-      text-shadow: 0 1px 8px rgb(0 0 0 / 40%);
+      justify-items: start;
+    }
+    .overlay-kicker, .overlay-location strong, #captureDate, #captureTime {
+      padding: 1px 6px;
+      background: rgb(12 27 27 / 28%);
+      border-radius: 5px;
+      text-shadow: 0 1px 3px rgb(0 0 0 / 70%);
+      white-space: nowrap;
     }
     .overlay-kicker {
       color: #c8d9ce;
@@ -717,29 +724,6 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       context.save();
       context.scale(scaleX, scaleY);
 
-      const badge = cameraOverlay.querySelector('.overlay-badge');
-      if (!badge.hidden) {
-        const badgeBox = getScreenshotBox(badge, contentRect);
-        const badgeStyle = getComputedStyle(badge);
-        const badgeRadius = Number.parseFloat(badgeStyle.borderTopLeftRadius) || 0;
-        drawRoundedRectangle(
-          context,
-          badgeBox.x,
-          badgeBox.y,
-          badgeBox.width,
-          badgeBox.height,
-          badgeRadius
-        );
-        context.fillStyle = badgeStyle.backgroundColor;
-        context.fill();
-        const borderWidth = Number.parseFloat(badgeStyle.borderWidth) || 0;
-        if (borderWidth > 0) {
-          context.lineWidth = borderWidth;
-          context.strokeStyle = badgeStyle.borderColor;
-          context.stroke();
-        }
-      }
-
       const overlayText = cameraOverlay.querySelectorAll(
         '.overlay-badge, .overlay-kicker, .overlay-location strong, #captureDate, #captureTime'
       );
@@ -749,6 +733,22 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         if (!text) continue;
         const box = getScreenshotBox(element, contentRect);
         const style = getComputedStyle(element);
+        drawRoundedRectangle(
+          context,
+          box.x,
+          box.y,
+          box.width,
+          box.height,
+          Number.parseFloat(style.borderTopLeftRadius) || 0
+        );
+        context.fillStyle = style.backgroundColor;
+        context.fill();
+        const borderWidth = Number.parseFloat(style.borderTopWidth) || 0;
+        if (borderWidth > 0) {
+          context.lineWidth = borderWidth;
+          context.strokeStyle = style.borderTopColor;
+          context.stroke();
+        }
         const fontSize = Number.parseFloat(style.fontSize);
         context.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
         context.fillStyle = style.color;
@@ -758,13 +758,10 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           : style.textAlign === 'center'
             ? 'center'
             : 'left';
-        const isBadge = element.classList.contains('overlay-badge');
-        const leftInset = isBadge
-          ? Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.borderLeftWidth)
-          : 0;
-        const rightInset = isBadge
-          ? Number.parseFloat(style.paddingRight) + Number.parseFloat(style.borderRightWidth)
-          : 0;
+        const leftInset =
+          Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.borderLeftWidth);
+        const rightInset =
+          Number.parseFloat(style.paddingRight) + Number.parseFloat(style.borderRightWidth);
         const contentLeft = box.x + leftInset;
         const contentRight = box.x + box.width - rightInset;
         const displayText = style.textTransform === 'uppercase' ? text.toUpperCase() : text;
@@ -782,9 +779,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
           x = (contentLeft + contentRight - textWidth) / 2;
         }
         context.textAlign = 'left';
-        if (element.closest('.overlay-bottom')) {
-          context.shadowColor = 'rgba(0, 0, 0, 0.4)';
-          context.shadowBlur = 8;
+        if (!element.classList.contains('overlay-badge')) {
+          context.shadowColor = 'rgba(0, 0, 0, 0.7)';
+          context.shadowBlur = 3;
           context.shadowOffsetY = 1;
         }
         if (letterSpacing === 0) {
