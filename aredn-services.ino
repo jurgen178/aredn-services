@@ -98,6 +98,8 @@ std::atomic<bool> wifiCredentialsSaved{false};
 std::atomic<bool> wifiConfigRequestPending{false};
 std::atomic<uint8_t> wifiProvisionState{0};
 std::atomic<bool> wifiScanActive{false};
+// Written from the Wi-Fi event task and logged by loop(); the count is stored last
+// so loop() sees the matching reason and time.
 std::atomic<uint32_t> wifiDisconnectCount{0};
 std::atomic<uint32_t> wifiDisconnectReason{0};
 std::atomic<uint32_t> wifiDisconnectAtMs{0};
@@ -482,6 +484,7 @@ void drawBoardDisplay()
       strlcpy(imageDimensions, "Unknown", sizeof(imageDimensions));
     }
     drawDisplayLine(3, "Size: ", imageDimensions);
+    // Measured time between the last two images, not the configured interval.
     char value[22];
     uint32_t refreshIntervalMs = 0;
     if (reolinkCamera.lastRefreshInterval(refreshIntervalMs))
@@ -494,6 +497,7 @@ void drawBoardDisplay()
     }
     drawDisplayLine(4, "Refresh: ", value);
 
+    // Resolution requested by the next fetch, chosen by the adaptive control.
     CameraAdaptive::Resolution nextResolution{};
     if (!reolinkCamera.nextRequestedResolution(nextResolution))
     {
@@ -1546,6 +1550,7 @@ bool formatCameraStatusJson(const ReolinkCamera::StatusSnapshot& status,
       "%*s\"refresh_seconds\": %lu,\n"
       "%*s\"capture_epoch\": %lu,\n"
       "%*s\"access_count\": %lu,\n"
+      // Adaptive resolution diagnostics; keep response buffers sized for these fields.
       "%*s\"resolution_level\": %u,\n"
       "%*s\"last_fetch_ms\": %lu,\n"
       "%*s\"last_fetch_bytes\": %lu,\n"
@@ -2759,6 +2764,7 @@ void setup()
   WiFi.setAutoReconnect(false);
   WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t info)
   {
+    // Runs in the Wi-Fi event task: only store values here and log from loop().
     wifiDisconnectReason.store(info.wifi_sta_disconnected.reason, std::memory_order_relaxed);
     wifiDisconnectAtMs.store(millis(), std::memory_order_relaxed);
     wifiDisconnectCount.fetch_add(1, std::memory_order_release);

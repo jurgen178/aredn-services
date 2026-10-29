@@ -10,12 +10,18 @@ namespace camera_adaptive_detail
     uint16_t height;
   };
 
+  // Level 0 is the camera's native resolution: no width/height is requested.
   constexpr Resolution RESOLUTIONS[] = {
       {0, 0},
       {896, 672},
       {640, 480}};
 }
 
+// Chooses the snapshot resolution and transfer timeouts from recent fetches.
+// Slow fetches build up pressure and lower the resolution; fast fetches build up
+// the opposite pressure and raise it again. Not thread-safe: only the camera
+// task may call the mutating methods. A JavaScript port is tested in
+// test/camera-adaptive-test.js and must be kept in sync.
 class CameraAdaptive
 {
 public:
@@ -52,6 +58,7 @@ public:
     return true;
   }
 
+  // The timeouts follow the averages of successful fetches within fixed bounds.
   uint32_t connectTimeoutMs() const
   {
     return headerAverageMs_ == 0 ? 5000
@@ -84,6 +91,8 @@ public:
       bytesPerSecond_ = bytesPerSecond_ == 0 ? sampleRate
           : static_cast<uint32_t>((static_cast<uint64_t>(bytesPerSecond_) * 3 + sampleRate) / 4);
     }
+    // A fetch above 40% of the refresh interval asks for a lower resolution,
+    // one below 25% allows a higher one; in between nothing changes.
     int direction = totalMs > intervalMs_ * 2 / 5 ? 1
         : totalMs < intervalMs_ / 4 ? -1 : 0;
     if (direction < 0 && level_ > 0 && !canIncrease(now, sampleRate))
@@ -112,6 +121,7 @@ public:
 private:
   const uint32_t intervalMs_;
   uint8_t level_ = 0;
+  // Positive: lower the resolution; negative: raise it. Accumulates elapsed time.
   int32_t pressureMs_ = 0;
   uint32_t lastObservationMs_ = 0;
   uint32_t lastChangeMs_ = 0;
@@ -141,6 +151,8 @@ private:
         : static_cast<uint32_t>((static_cast<uint64_t>(previous) * 3 + bytes) / 4);
   }
 
+  // Raising the resolution is only allowed if the larger image, estimated from
+  // its last known size and the measured throughput, would still be fast enough.
   bool canIncrease(uint32_t now, uint32_t sampleRate) const
   {
     const uint32_t targetBytes = imageBytes_[level_ - 1];
@@ -186,10 +198,13 @@ private:
       pressureMs_ = pressureMs_ < -amount ? pressureMs_ + amount : 0;
     }
 
+    // Lowering reacts after two intervals of slow fetches, raising only after
+    // four of fast ones. Capping keeps a long streak from delaying a reversal.
     const int32_t downThreshold = static_cast<int32_t>(intervalMs_ * 2);
     const int32_t upThreshold = static_cast<int32_t>(intervalMs_ * 4);
     if (pressureMs_ > downThreshold) pressureMs_ = downThreshold;
     if (pressureMs_ < -upThreshold) pressureMs_ = -upThreshold;
+    // Hold each level for at least two intervals to prevent oscillating.
     if (haveChange_ && now - lastChangeMs_ < intervalMs_ * 2) return;
 
     if (pressureMs_ >= downThreshold && level_ + 1 < LEVELS)

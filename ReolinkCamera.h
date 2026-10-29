@@ -23,6 +23,8 @@ public:
   static constexpr uint32_t SNAPSHOT_BUSY_RETRY_MS = 5000;
   // A failed attempt already takes 5-10 s, so a short cap keeps recovery quick.
   static constexpr uint32_t MAX_FAILURE_RETRY_MS = 10000;
+  // Slow links can stall briefly; the library default could drop the image
+  // connection too early.
   static constexpr uint32_t IMAGE_ACK_TIMEOUT_MS = 15000;
   static constexpr uint8_t MAX_BUSY_RETRIES = 12;
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
@@ -39,6 +41,7 @@ public:
     uint32_t refreshSeconds;
     uint32_t captureEpoch;
     uint32_t accessCount;
+    // Diagnostics of the adaptive resolution control, shown in the browser log.
     uint8_t resolutionLevel;
     uint32_t lastFetchMs;
     uint32_t lastFetchBytes;
@@ -149,6 +152,7 @@ public:
           }
           const size_t count = std::min(maxLength, imageSize - offset);
           memcpy(output, imageData + offset, count);
+          // Only records what was handed to the TCP stack, not what the browser received.
           lease->provided = offset + count;
           return count;
         });
@@ -447,6 +451,9 @@ private:
     InvalidJpeg
   };
 
+  // What the camera task does after a poll: Normal waits for the next regular
+  // interval, Busy retries quickly without an error, TransientFailure retries
+  // with a growing delay.
   enum class PollResult : uint8_t
   {
     Normal,
@@ -463,6 +470,8 @@ private:
     uint32_t expectedBytes = 0;
   };
 
+  // Keeps the buffer alive while a response streams from it; the destructor
+  // runs when the HTTP response is finished or aborted.
   struct ImageLease
   {
     ImageLease(ReolinkCamera* owner, uint8_t bufferIndex, size_t imageSize)
@@ -499,6 +508,8 @@ private:
   std::atomic<uint32_t> version_{0};
   std::atomic<uint32_t> lastSuccessMs_{0};
   std::atomic<uint32_t> imageDimensions_{0};
+  // Incremented on every configuration change so the camera task can notice it
+  // and discard the adaptive state and an in-flight fetch of the old camera.
   std::atomic<uint32_t> configRevision_{0};
   std::atomic<uint8_t> resolutionLevel_{0};
   std::atomic<uint32_t> lastFetchMs_{0};
@@ -554,6 +565,7 @@ private:
       const TickType_t elapsed = xTaskGetTickCount() - pollStartedAt;
       if (result == PollResult::TransientFailure)
       {
+        // Back off 3 s, 6 s, 10 s, ...; any notification (for example new settings) ends the wait.
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(retryDelayMs));
         retryDelayMs = std::min(retryDelayMs * 2, MAX_FAILURE_RETRY_MS);
       }
@@ -563,6 +575,7 @@ private:
       }
       else
       {
+        // The interval counts from the start of the poll, so a slow fetch does not delay the next one.
         retryDelayMs = 3000;
         const TickType_t interval = pdMS_TO_TICKS(SNAPSHOT_INTERVAL_MS);
         if (elapsed < interval)
@@ -634,6 +647,7 @@ private:
     FetchMetrics metrics{};
     const uint8_t requestLevel = adaptive_.level();
     const bool fetched = fetchSnapshot(settings, target, imageSize, error, metrics);
+    // The settings changed during the fetch, so this result belongs to the old camera.
     if (revision != configRevision_.load(std::memory_order_acquire))
     {
       return PollResult::Busy;
@@ -643,6 +657,9 @@ private:
     lastFetchAvailable_.store(true, std::memory_order_release);
     if (!fetched)
     {
+      // Only a transfer that was slow or too large, not one that never started,
+      // says something about the resolution. A partial JPEG also reveals the
+      // size the full image was expected to have.
       const bool transferEvidence =
           (error == SnapshotError::SnapshotTimeout && metrics.received > 0) ||
           error == SnapshotError::SnapshotTooLarge;
@@ -807,6 +824,7 @@ private:
     }
     if (adaptive_.level() != 0)
     {
+      // Level 0 sends no size and keeps the camera's native resolution.
       const CameraAdaptive::Resolution resolution = adaptive_.resolution();
       const int added = snprintf(url + urlLength, sizeof(url) - urlLength,
                                  "&width=%u&height=%u",
@@ -832,6 +850,7 @@ private:
     }
     http.addHeader("Accept", "image/jpeg");
     const int responseCode = http.GET();
+    // GET() returns after the response headers, so this is the time to first byte.
     metrics.headerMs = millis() - startedAt;
     metrics.totalMs = metrics.headerMs;
     lastHttpStatus_.store(

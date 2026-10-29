@@ -3,12 +3,14 @@
 #include <atomic>
 #include <stdint.h>
 
+// Measures the real time between two successful snapshots, for the OLED display.
 class CameraRefresh
 {
 public:
   // The caller serializes recordSuccess() and clear(); readers need no lock.
   void recordSuccess(uint32_t nowMs)
   {
+    // The subtraction of unsigned values stays correct across millis() wraparound.
     if (havePrevious_)
     {
       intervalMs_.store(nowMs - previousMs_, std::memory_order_release);
@@ -18,6 +20,7 @@ public:
     havePrevious_ = true;
   }
 
+  // Called when the image is discarded, so an old interval is not shown for a new setup.
   void clear()
   {
     available_.store(false, std::memory_order_release);
