@@ -34,6 +34,7 @@ async function main() {
   let statusFails = false;
   let imageResponseFactory = null;
   let nextTimerId = 0;
+  let fakeNow = Date.now();
   const timers = new Map();
   const logs = [];
   let imageWidth = 2560;
@@ -61,6 +62,7 @@ async function main() {
     },
     navigator: { onLine: true },
     console: { log(message) { logs.push(message); }, error() {} },
+    Date: class extends Date { static now() { return fakeNow; } },
     AbortController, URLSearchParams, Blob,
     URL: { createObjectURL() { return 'blob:test'; }, revokeObjectURL() {} },
     Image: class {
@@ -86,34 +88,37 @@ async function main() {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(statusRequests, 1);
   assert.equal(imageRequests, 1);
-  assert.doesNotMatch(elements.get('cameraStatus').textContent, /MP/);
+  assert.doesNotMatch(elements.get('cameraStatus').textContent, /\(\d+x\d+\)/);
   assert.match(elements.get('cameraStatus').textContent, /Loading new image\./,
     'show image loading while the previous image is still fresh');
 
   status.version = 2;
   await vm.runInContext('refreshCameraStatus()', context);
-  assert.equal(statusRequests, 2, 'status must continue while the image is downloading');
+  assert.equal(statusRequests, 1, 'status polling must be throttled while the image is downloading');
+  fakeNow += 31000;
+  await vm.runInContext('refreshCameraStatus()', context);
+  assert.equal(statusRequests, 2, 'status must still be polled during a long download');
   assert.equal(imageRequests, 1, 'only one image request may run at a time');
 
   finishImage({ type: 'image/jpeg', size: 100 });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(vm.runInContext('currentVersion', context), 1);
   assert.equal(elements.get('cameraImage').hidden, false);
-  assert.match(elements.get('cameraStatus').textContent, /\(5MP\)/);
+  assert.match(elements.get('cameraStatus').  textContent, /\(2560x1920\)/);
   imageWidth = 896;
   imageHeight = 672;
   image = new Promise(resolve => { finishImage = resolve; });
   await vm.runInContext('refreshCameraStatus()', context);
   assert.equal(statusRequests, 3);
   assert.equal(imageRequests, 2, 'a newer version must be requested after the first download');
-  assert.match(elements.get('cameraStatus').textContent, /\(5MP\)/,
+  assert.match(elements.get('cameraStatus').textContent, /\(2560x1920\)/,
     'the displayed resolution must remain unchanged while the new image loads');
   assert.match(elements.get('cameraStatus').textContent, /Loading new image\./,
     'show the loading message during a normal refresh');
   finishImage({ type: 'image/jpeg', size: 100 });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(vm.runInContext('currentVersion', context), 2);
-  assert.match(elements.get('cameraStatus').textContent, /\(0\.6MP\)/);
+  assert.match(elements.get('cameraStatus').textContent, /\(896x672\)/);
   await vm.runInContext('refreshCameraStatus()', context);
   assert.equal(imageRequests, 2, 'an unchanged version must not be downloaded again');
 
@@ -121,13 +126,14 @@ async function main() {
   status.version = 3;
   await vm.runInContext('refreshCameraStatus()', context);
   assert.equal(imageRequests, 3);
+  fakeNow += 31000;
   status.image_available = false;
   status.status = 'not_configured';
   status.version = 4;
   await vm.runInContext('refreshCameraStatus()', context);
   assert.equal(vm.runInContext('cameraActivity', context), '');
   assert.equal(vm.runInContext('currentVersion', context), 4);
-  assert.doesNotMatch(elements.get('cameraStatus').textContent, /MP/);
+  assert.doesNotMatch(elements.get('cameraStatus').textContent, /\(\d+x\d+\)/);
   finishImage({ type: 'image/jpeg', size: 100 });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(vm.runInContext('currentVersion', context), 4,
@@ -214,7 +220,40 @@ async function main() {
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(imageRequests, 7);
   assert.equal(vm.runInContext('currentVersion', context), 5);
-  assert.match(elements.get('cameraStatus').textContent, /\(0\.3MP\)/);
+  assert.match(elements.get('cameraStatus').textContent, /\(640x480\)/);
+  assert.equal(vm.runInContext('imageRetryDelayMs', context), 2000);
+
+  statusFails = false;
+  imageResponseFactory = partialResponse;
+  status.version = 6;
+  await vm.runInContext('refreshCameraStatus()', context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(imageRequests, 8);
+  await vm.runInContext('refreshCameraStatus()', context);
+  assert.equal(imageRequests, 8, 'the same failed version must wait for the retry timer');
+  assert.match(vm.runInContext('cameraActivity', context), /could not be loaded; retrying/,
+    'the retry notice must survive status polls while a retry is pending');
+  imageResponseFactory = () => {
+    let reads = 0;
+    return {
+      ok: true,
+      headers: { get(name) {
+        return name === 'Content-Length' ? '100' : name === 'Content-Type' ? 'image/jpeg' : null;
+      } },
+      body: { getReader() { return {
+        async read() {
+          return reads++ === 0
+            ? { done: false, value: new Uint8Array(100) }
+            : { done: true };
+        }
+      }; } }
+    };
+  };
+  status.version = 7;
+  await vm.runInContext('refreshCameraStatus()', context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(imageRequests, 9, 'a newer version must not wait for the retry backoff');
+  assert.equal(vm.runInContext('currentVersion', context), 7);
   assert.equal(vm.runInContext('imageRetryDelayMs', context), 2000);
   console.log('camera page tests passed');
 }

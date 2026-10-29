@@ -21,6 +21,8 @@ class ReolinkCamera
 public:
   static constexpr uint32_t SNAPSHOT_INTERVAL_MS = 30000;
   static constexpr uint32_t SNAPSHOT_BUSY_RETRY_MS = 5000;
+  // A failed attempt already takes 5-10 s, so a short cap keeps recovery quick.
+  static constexpr uint32_t MAX_FAILURE_RETRY_MS = 10000;
   static constexpr uint32_t IMAGE_ACK_TIMEOUT_MS = 15000;
   static constexpr uint8_t MAX_BUSY_RETRIES = 12;
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
@@ -553,7 +555,7 @@ private:
       if (result == PollResult::TransientFailure)
       {
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(retryDelayMs));
-        retryDelayMs = std::min(retryDelayMs * 2, SNAPSHOT_INTERVAL_MS);
+        retryDelayMs = std::min(retryDelayMs * 2, MAX_FAILURE_RETRY_MS);
       }
       else if (result == PollResult::Busy)
       {

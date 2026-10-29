@@ -44,6 +44,35 @@ async function main() {
     assert.equal(complete.expected, 100);
     assert.equal(complete.received, 100);
     assert.equal(blob.size, 100);
+
+    // Without a stream reader, a slow body must not trip the idle timer.
+    const delays = new Map();
+    const cleared = new Set();
+    let idleCleared = null;
+    const fallbackContext = vm.createContext({
+      window: {
+        setTimeout(callback, delay) {
+          const id = setTimeout(callback, delay);
+          delays.set(id, delay);
+          return id;
+        },
+        clearTimeout(id) { cleared.add(id); clearTimeout(id); }
+      },
+      fetch: async () => ({
+        ok: true,
+        headers: { get(name) { return name === 'Content-Type' ? 'image/jpeg' : null; } },
+        blob: async () => {
+          idleCleared = [...cleared].some(id => delays.get(id) === 30000);
+          return new Blob([Buffer.alloc(10)], { type: 'image/jpeg' });
+        }
+      }),
+      Blob, lastImageDownloadMs: 0
+    });
+    vm.runInContext(source.slice(start, end), fallbackContext);
+    const fallback = { received: 0, expected: null };
+    await fallbackContext.fetchSnapshotBlob('/x', new AbortController(), fallback);
+    assert.equal(fallback.received, 10);
+    assert.equal(idleCleared, true, 'the idle timer must be cancelled before reading the blob');
     console.log('camera HTTP transfer tests passed');
   } finally {
     server.closeAllConnections();
