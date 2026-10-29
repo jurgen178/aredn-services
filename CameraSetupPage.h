@@ -140,7 +140,7 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
             return 'Could not get a new camera image; retrying.';
           }
           return status.status === 'updating'
-            ? 'Checking for a newer camera image.'
+            ? 'Checking for new camera image.'
             : '';
       }
     }

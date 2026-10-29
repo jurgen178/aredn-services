@@ -617,14 +617,12 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
             return 'Could not get a new camera image; retrying.';
           }
           return status.status === 'updating'
-            ? 'Checking for a newer camera image.'
+            ? 'Checking for new camera image.'
             : '';
       }
     }
 
-    // Show the image age. A short hiccup (for example a request that fails while
-    // the network is still reconnecting) must stay invisible, so an explanation is
-    // only added once the image is overdue by more than one missed update.
+    // Keep brief failures unobtrusive, but show active image downloads immediately.
     function describeCameraStatus() {
       const activity = cameraActivity || describeCameraIssue(latestCameraStatus);
       if (displayedCapturedAtMs !== null) {
@@ -632,7 +630,8 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
         const base = `Updated ${formatElapsedTime(age)} ago` +
           (displayedResolution ? ` ${displayedResolution}` : '');
         const overdueAfter = 2 * (latestCameraStatus?.refresh_seconds || 30);
-        const shown = Boolean(activity) && age > overdueAfter;
+        const shown = Boolean(activity) &&
+          (cameraActivity === 'Loading new image.' || age > overdueAfter);
         const notice = `${activity || 'none'} (${shown ? 'shown' : 'hidden, image not overdue'})`;
         if (notice !== lastLoggedNotice) {
           lastLoggedNotice = notice;

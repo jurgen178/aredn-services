@@ -87,6 +87,8 @@ async function main() {
   assert.equal(statusRequests, 1);
   assert.equal(imageRequests, 1);
   assert.doesNotMatch(elements.get('cameraStatus').textContent, /MP/);
+  assert.match(elements.get('cameraStatus').textContent, /Loading new image\./,
+    'show image loading while the previous image is still fresh');
 
   status.version = 2;
   await vm.runInContext('refreshCameraStatus()', context);
@@ -106,6 +108,8 @@ async function main() {
   assert.equal(imageRequests, 2, 'a newer version must be requested after the first download');
   assert.match(elements.get('cameraStatus').textContent, /\(5MP\)/,
     'the displayed resolution must remain unchanged while the new image loads');
+  assert.match(elements.get('cameraStatus').textContent, /Loading new image\./,
+    'show the loading message during a normal refresh');
   finishImage({ type: 'image/jpeg', size: 100 });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(vm.runInContext('currentVersion', context), 2);
