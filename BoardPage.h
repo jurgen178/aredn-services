@@ -607,7 +607,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
         <h2 id="composeTitle">Write a message</h2>
       </div>
       <div id="clockSetup" class="clock-setup" hidden>
-        <p id="clockStatus" class="clock-status" role="status" aria-live="polite">Checking device time.p>
+        <p id="clockStatus" class="clock-status" role="status" aria-live="polite">Checking device time.</p>
         <form id="clockForm">
           <div class="clock-controls">
             <label for="deviceDateTime">Set device date and time</label>
@@ -866,7 +866,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
             ? `${API_BASE}/messages?limit=100`
             : `${API_BASE}/messages?before=${beforeId}&limit=100`;
           const response = await fetchBoardReadWhenAvailable(endpoint, () =>
-            operationDialogMessage.textContent = 'Waiting for the board operation to finish.';
+            operationDialogMessage.textContent = 'Waiting for the board operation to finish ...');
           if (!response.ok) {
             throw new Error('Export page failed');
           }

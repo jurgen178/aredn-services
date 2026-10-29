@@ -1276,8 +1276,9 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       ++imageRequestToken;
       imageRequestController?.abort();
       imageRequestInProgress = false;
+      clearImageRetry();
+      imageRetryDelayMs = 2000;
       refreshCameraStatus();
-      scheduleImageRetry();
     });
     window.addEventListener('online', () => debugLog('browser reports: network online'));
     window.addEventListener('offline', () => debugLog('browser reports: network offline'));

@@ -78,7 +78,7 @@ static const char CAMERA_SETUP_PAGE[] PROGMEM = R"CAMSETUP(
       <button id="save" type="submit">Save camera settings</button>
       <button id="clear" class="secondary" type="button">Clear saved settings</button>
     </form>
-    <p id="status" role="status" aria-live="polite">Loading camera settings.p>
+    <p id="status" role="status" aria-live="polite">Loading camera settings.</p>
       <p id="camera-state" role="status">Camera status: checking</p>
   </main>
   <script>
