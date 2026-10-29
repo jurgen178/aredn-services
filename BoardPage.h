@@ -652,7 +652,7 @@ static const char BOARD_PAGE[] PROGMEM = R"AREDNHTML(
           <a id="exportButton" class="board-action-button" href="/msg-board/api/messages/export.json" download="aredn-messages.json" title="Download all stored messages as JSON">Export Messages</a>
         </div>
       </div>
-      <p id="feedInfo" class="feed-info" aria-live="polite">Loading messages.</p>
+      <p id="feedInfo" class="feed-info" aria-live="polite">Loading messages</p>
       <form id="searchForm" class="message-search">
         <input id="searchInput" type="search" maxlength="64" placeholder="Search name or message" aria-label="Search name or message">
         <select id="priorityFilter" aria-label="Filter by priority">
