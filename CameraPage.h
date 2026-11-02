@@ -320,7 +320,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       <div>
         <p class="header-label"><a class="header-label-link" href="/" title="Open the AREDN services portal">AREDN · Bellevue Downtown View</a></p>
         <h1>Camera Snapshot</h1>
-        <p class="intro">A camera view of Bellevue Downtown, recorded every 30 s.</p>
+        <p class="intro">A camera view of Bellevue Downtown.</p>
         <p class="experimental-note">EXPERIMENTAL ESP32 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
       </div>
     </div>
@@ -634,7 +634,7 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
       const activity = cameraActivity || describeCameraIssue(latestCameraStatus);
       if (displayedCapturedAtMs !== null) {
         const age = Math.max(0, Math.floor((Date.now() - displayedCapturedAtMs) / 1000));
-        const base = `Recorded ${formatElapsedTime(age)} ago` +
+        const base = `Taken ${formatElapsedTime(age)} ago` +
           (displayedResolution ? ` ${displayedResolution}` : '');
         const overdueAfter = 2 * (latestCameraStatus?.refresh_seconds || 30);
         const shown = Boolean(activity) &&
