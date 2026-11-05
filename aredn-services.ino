@@ -98,6 +98,11 @@ std::atomic<bool> wifiCredentialsSaved{false};
 std::atomic<bool> wifiConfigRequestPending{false};
 std::atomic<uint8_t> wifiProvisionState{0};
 std::atomic<bool> wifiScanActive{false};
+// Written from the Wi-Fi event task and logged by loop(); the count is stored last
+// so loop() sees the matching reason and time.
+std::atomic<uint32_t> wifiDisconnectCount{0};
+std::atomic<uint32_t> wifiDisconnectReason{0};
+std::atomic<uint32_t> wifiDisconnectAtMs{0};
 // Client samples are protected because HTTP handlers may run concurrently.
 SemaphoreHandle_t clientTimeMutex = nullptr;
 // The admin session and login throttling state below are protected by adminMutex.
@@ -479,10 +484,55 @@ void drawBoardDisplay()
       strlcpy(imageDimensions, "Unknown", sizeof(imageDimensions));
     }
     drawDisplayLine(3, "Size: ", imageDimensions);
-    drawDisplayLine(4, "Refresh: ", "30 seconds");
-    drawDisplayLine(5, "", "Bellevue Downtown");
-    drawDisplayLine(6, "Overlay: ", "Browser only");
-    drawDisplayLine(7, "Setup: ", "Use setup AP");
+    // Measured time between the last two images, not the configured interval.
+    char value[22];
+    uint32_t refreshIntervalMs = 0;
+    if (reolinkCamera.lastRefreshInterval(refreshIntervalMs))
+    {
+      formatDisplayDuration(value, sizeof(value), refreshIntervalMs / 1000);
+    }
+    else
+    {
+      strlcpy(value, "Waiting", sizeof(value));
+    }
+    drawDisplayLine(4, "Refresh: ", value);
+
+    // Resolution requested by the next fetch, chosen by the adaptive control.
+    CameraAdaptive::Resolution nextResolution{};
+    if (!reolinkCamera.nextRequestedResolution(nextResolution))
+    {
+      strlcpy(value, "Unknown", sizeof(value));
+    }
+    else if (nextResolution.width == 0 && nextResolution.height == 0)
+    {
+      strlcpy(value, "Camera default", sizeof(value));
+    }
+    else
+    {
+      snprintf(value, sizeof(value), "%ux%u",
+               static_cast<unsigned>(nextResolution.width),
+               static_cast<unsigned>(nextResolution.height));
+    }
+    drawDisplayLine(5, "Next: ", value);
+
+    uint32_t fetchMs = 0;
+    uint32_t fetchBytes = 0;
+    if (reolinkCamera.lastFetch(fetchMs, fetchBytes))
+    {
+      snprintf(value, sizeof(value), "%lu.%lus",
+               static_cast<unsigned long>(fetchMs / 1000),
+               static_cast<unsigned long>((fetchMs % 1000) / 100));
+      drawDisplayLine(6, "Fetch: ", value);
+      snprintf(value, sizeof(value), "%lu.%lu KiB",
+               static_cast<unsigned long>(fetchBytes / 1024),
+               static_cast<unsigned long>((fetchBytes % 1024) * 10 / 1024));
+      drawDisplayLine(7, "Data: ", value);
+    }
+    else
+    {
+      drawDisplayLine(6, "Fetch: ", "Waiting");
+      drawDisplayLine(7, "Data: ", "Waiting");
+    }
   }
 
   display.display();
@@ -494,7 +544,7 @@ void initializeDisplay()
   Wire.begin();
   Serial.println("I2C initialized");
 
-  Serial.println("Scanning I2C bus...");
+  Serial.println("Scanning I2C bus.");
   Wire.beginTransmission(OLED_ADDRESS);
   const uint8_t error = Wire.endTransmission();
 
@@ -523,7 +573,7 @@ void initializeDisplay()
   display.setCursor(0, 0);
   display.println("AREDN MESSAGE BOARD");
   display.println();
-  display.println("STARTING SERVICE ...");
+  display.println("STARTING SERVICE");
   display.display();
 }
 
@@ -1499,7 +1549,12 @@ bool formatCameraStatusJson(const ReolinkCamera::StatusSnapshot& status,
       "%*s\"age_seconds\": %lu,\n"
       "%*s\"refresh_seconds\": %lu,\n"
       "%*s\"capture_epoch\": %lu,\n"
-      "%*s\"access_count\": %lu\n"
+      "%*s\"access_count\": %lu,\n"
+      // Adaptive resolution diagnostics; keep response buffers sized for these fields.
+      "%*s\"resolution_level\": %u,\n"
+      "%*s\"last_fetch_ms\": %lu,\n"
+      "%*s\"last_fetch_bytes\": %lu,\n"
+      "%*s\"download_timeout_ms\": %lu\n"
       "%*s}",
       fieldIndent, "",
       status.status,
@@ -1519,6 +1574,14 @@ bool formatCameraStatusJson(const ReolinkCamera::StatusSnapshot& status,
       static_cast<unsigned long>(status.captureEpoch),
       fieldIndent, "",
       static_cast<unsigned long>(status.accessCount),
+      fieldIndent, "",
+      static_cast<unsigned>(status.resolutionLevel),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.lastFetchMs),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.lastFetchBytes),
+      fieldIndent, "",
+      static_cast<unsigned long>(status.downloadTimeoutMs),
       indent, "");
   return written >= 0 && static_cast<size_t>(written) < responseSize;
 }
@@ -1818,7 +1881,7 @@ void registerRoutes()
     const ReolinkCamera::StatusSnapshot status =
         reolinkCamera.statusSnapshot(
             cameraPageAccessCount.load(std::memory_order_relaxed));
-    char response[448];
+    char response[512];
     if (!formatCameraStatusJson(status, response, sizeof(response), 0))
     {
       request->send(500, "application/json",
@@ -2459,7 +2522,7 @@ void registerRoutes()
     const uint32_t toolsAccessCount =
         toolsPageAccessCount.load(std::memory_order_relaxed);
     char boardStatusJson[512];
-    char cameraStatusJson[448];
+    char cameraStatusJson[512];
     char toolsStatusJson[96];
     char response[2048];
     if (!formatMessageBoardStatusJson(
@@ -2699,6 +2762,13 @@ void setup()
   WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(false);
+  WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t info)
+  {
+    // Runs in the Wi-Fi event task: only store values here and log from loop().
+    wifiDisconnectReason.store(info.wifi_sta_disconnected.reason, std::memory_order_relaxed);
+    wifiDisconnectAtMs.store(millis(), std::memory_order_relaxed);
+    wifiDisconnectCount.fetch_add(1, std::memory_order_release);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   const IPAddress setupIp(192, 168, 4, 1);
   const IPAddress setupGateway(192, 168, 4, 1);
   const IPAddress setupSubnet(255, 255, 255, 0);
@@ -2776,6 +2846,19 @@ void loop()
 {
   const uint32_t now = millis();
   bool connected = WiFi.status() == WL_CONNECTED;
+  static uint32_t loggedDisconnectCount = 0;
+  const uint32_t disconnectCount = wifiDisconnectCount.load(std::memory_order_acquire);
+  if (disconnectCount != loggedDisconnectCount)
+  {
+    loggedDisconnectCount = disconnectCount;
+    Serial.printf("Wi-Fi disconnect event: reason %lu, uptime %lu ms, count %lu, "
+                  "free heap %lu bytes, status %d\n",
+                  static_cast<unsigned long>(wifiDisconnectReason.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long>(wifiDisconnectAtMs.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long>(disconnectCount),
+                  static_cast<unsigned long>(ESP.getFreeHeap()),
+                  static_cast<int>(WiFi.status()));
+  }
 
   if (wifiConfigRequestPending.exchange(false, std::memory_order_acq_rel))
   {

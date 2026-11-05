@@ -28,7 +28,7 @@ $WebFlasherPort = 5173  # 5173 is the standard port for Vite
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue) -or
     -not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    Write-Host "Node.js is not installed. Installing the current LTS release..." -ForegroundColor Yellow
+    Write-Host "Node.js is not installed. Installing the current LTS release." -ForegroundColor Yellow
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         Write-Host "`n[ERROR] winget is not available. Install Node.js LTS manually from https://nodejs.org/ and run this script again." -ForegroundColor Red
         exit 1
@@ -62,17 +62,17 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue) -or
 $Board = "arduino:esp32:nano_nora"
 $Port  = "COM7"
 
-Write-Host "[1/5] Compiling for Nano ESP32..." -ForegroundColor Cyan
+Write-Host "[1/5] Compiling for Nano ESP32." -ForegroundColor Cyan
 New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
 & $ArduinoCli compile --libraries $LibraryDir -b $Board --output-dir $BuildDir
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`n[ERROR] Compilation failed!" -ForegroundColor Red
-    Read-Host "Press Enter to exit..."
+    Read-Host "Press Enter to exit."
     exit $LASTEXITCODE
 }
 
-Write-Host "`n[2/5] Creating release package $Version..." -ForegroundColor Cyan
+Write-Host "`n[2/5] Creating release package $Version." -ForegroundColor Cyan
 if (Test-Path $ReleaseDirectory) {
     Remove-Item $ReleaseDirectory -Recurse -Force
 }
@@ -120,29 +120,29 @@ $ReleaseEntries += [ordered]@{
 ConvertTo-Json -InputObject $ReleaseEntries -Depth 4 | Set-Content $ReleaseIndexPath
 Write-Host "Release created: $ReleaseZip" -ForegroundColor Green
 
-Write-Host "`n[3/5] Installing web flasher dependencies..." -ForegroundColor Cyan
+Write-Host "`n[3/5] Installing web flasher dependencies." -ForegroundColor Cyan
 Push-Location $WebFlasherDirectory
 & npm install
 $NpmInstallExitCode = $LASTEXITCODE
 Pop-Location
 if ($NpmInstallExitCode -ne 0) {
     Write-Host "`n[ERROR] Installing web flasher dependencies failed!" -ForegroundColor Red
-    Read-Host "Press Enter to exit..."
+    Read-Host "Press Enter to exit."
     exit $NpmInstallExitCode
 }
 
-Write-Host "`n[4/5] Building web flasher..." -ForegroundColor Cyan
+Write-Host "`n[4/5] Building web flasher." -ForegroundColor Cyan
 Push-Location $WebFlasherDirectory
 & npm run build
 $WebBuildExitCode = $LASTEXITCODE
 Pop-Location
 if ($WebBuildExitCode -ne 0) {
     Write-Host "`n[ERROR] Web flasher build failed!" -ForegroundColor Red
-    Read-Host "Press Enter to exit..."
+    Read-Host "Press Enter to exit."
     exit $WebBuildExitCode
 }
 
-Write-Host "`n[5/6] Starting local web flasher..." -ForegroundColor Cyan
+Write-Host "`n[5/6] Starting local web flasher." -ForegroundColor Cyan
 $WebFlasherUrl = "http://localhost:$WebFlasherPort/"
 $WebPageReady = $false
 try {
@@ -199,12 +199,12 @@ Write-Host "Test page: $WebFlasherUrl" -ForegroundColor Green
 Write-Host "`n[6/6] Board upload" -ForegroundColor Cyan
 $UploadChoice = Read-Host "Upload firmware to board on $Port? [Y/n]"
 if ([string]::IsNullOrWhiteSpace($UploadChoice) -or $UploadChoice -match '^(Y|y|Yes|yes)$') {
-    Write-Host "Uploading to board ($Port)..." -ForegroundColor Cyan
+    Write-Host "Uploading to board ($Port)." -ForegroundColor Cyan
     & $ArduinoCli upload -p $Port -b $Board --input-dir $BuildDir
 
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "`n[ERROR] Upload failed! Check the USB connection." -ForegroundColor Red
-        Read-Host "Press Enter to exit..."
+        Write-Host "`n[ERROR] Upload failed. Check the USB connection." -ForegroundColor Red
+        Read-Host "Press Enter to exit."
         exit $LASTEXITCODE
     }
 

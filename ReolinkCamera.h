@@ -13,13 +13,19 @@
 #include <cstring>
 #include <cstdlib>
 #include <time.h>
+#include "CameraAdaptive.h"
+#include "CameraRefresh.h"
 
 class ReolinkCamera
 {
 public:
   static constexpr uint32_t SNAPSHOT_INTERVAL_MS = 30000;
-  static constexpr uint32_t SNAPSHOT_DOWNLOAD_TIMEOUT_MS = 20000;
   static constexpr uint32_t SNAPSHOT_BUSY_RETRY_MS = 5000;
+  // A failed attempt already takes 5-10 s, so a short cap keeps recovery quick.
+  static constexpr uint32_t MAX_FAILURE_RETRY_MS = 10000;
+  // Slow links can stall briefly; the library default could drop the image
+  // connection too early.
+  static constexpr uint32_t IMAGE_ACK_TIMEOUT_MS = 15000;
   static constexpr uint8_t MAX_BUSY_RETRIES = 12;
   static constexpr size_t MAX_JPEG_SIZE = 2 * 1024 * 1024;
   static constexpr uint32_t MIN_VALID_CAPTURE_EPOCH = 1577836800UL;
@@ -35,6 +41,11 @@ public:
     uint32_t refreshSeconds;
     uint32_t captureEpoch;
     uint32_t accessCount;
+    // Diagnostics of the adaptive resolution control, shown in the browser log.
+    uint8_t resolutionLevel;
+    uint32_t lastFetchMs;
+    uint32_t lastFetchBytes;
+    uint32_t downloadTimeoutMs;
   };
 
   bool begin()
@@ -120,7 +131,7 @@ public:
     xSemaphoreGive(snapshotMutex_);
 
     std::shared_ptr<ImageLease> lease(
-        new (std::nothrow) ImageLease(this, index));
+        new (std::nothrow) ImageLease(this, index, imageSize));
     if (!lease)
     {
       releaseReader(index);
@@ -141,6 +152,8 @@ public:
           }
           const size_t count = std::min(maxLength, imageSize - offset);
           memcpy(output, imageData + offset, count);
+          // Only records what was handed to the TCP stack, not what the browser received.
+          lease->provided = offset + count;
           return count;
         });
     if (response == nullptr)
@@ -151,6 +164,11 @@ public:
     response->addHeader("Cache-Control", "no-store");
     response->addHeader("X-Camera-Refresh-Seconds",
                         String(SNAPSHOT_INTERVAL_MS / 1000));
+    const uint32_t ackTimeout = request->client()->getAckTimeout();
+    if (ackTimeout != 0 && ackTimeout < IMAGE_ACK_TIMEOUT_MS)
+    {
+      request->client()->setAckTimeout(IMAGE_ACK_TIMEOUT_MS);
+    }
     request->send(response);
   }
 
@@ -181,7 +199,11 @@ public:
         ageSeconds,
         SNAPSHOT_INTERVAL_MS / 1000,
         captureEpoch,
-        pageAccessCount};
+        pageAccessCount,
+        resolutionLevel_.load(std::memory_order_acquire),
+        lastFetchMs_.load(std::memory_order_acquire),
+        lastFetchBytes_.load(std::memory_order_acquire),
+        downloadTimeoutMs_.load(std::memory_order_acquire)};
   }
 
   void handleConfiguration(AsyncWebServerRequest* request) const
@@ -289,6 +311,7 @@ public:
     }
     settings_ = updated;
     configured_ = true;
+    configRevision_.fetch_add(1, std::memory_order_release);
     xSemaphoreGive(configMutex_);
 
     clearSnapshot();
@@ -317,6 +340,7 @@ public:
     }
     memset(&settings_, 0, sizeof(settings_));
     configured_ = false;
+    configRevision_.fetch_add(1, std::memory_order_release);
     xSemaphoreGive(configMutex_);
 
     clearSnapshot();
@@ -365,6 +389,28 @@ public:
     return width != 0 && height != 0;
   }
 
+  bool lastRefreshInterval(uint32_t& intervalMs) const
+  {
+    return refresh_.interval(intervalMs);
+  }
+
+  bool nextRequestedResolution(CameraAdaptive::Resolution& resolution) const
+  {
+    return CameraAdaptive::resolutionAt(
+        resolutionLevel_.load(std::memory_order_acquire), resolution);
+  }
+
+  bool lastFetch(uint32_t& durationMs, uint32_t& bytes) const
+  {
+    if (!lastFetchAvailable_.load(std::memory_order_acquire))
+    {
+      return false;
+    }
+    durationMs = lastFetchMs_.load(std::memory_order_acquire);
+    bytes = lastFetchBytes_.load(std::memory_order_acquire);
+    return true;
+  }
+
 private:
   struct CameraSettings
   {
@@ -405,16 +451,44 @@ private:
     InvalidJpeg
   };
 
+  // What the camera task does after a poll: Normal waits for the next regular
+  // interval, Busy retries quickly without an error, TransientFailure retries
+  // with a growing delay.
+  enum class PollResult : uint8_t
+  {
+    Normal,
+    Busy,
+    TransientFailure
+  };
+
+  struct FetchMetrics
+  {
+    uint32_t totalMs = 0;
+    uint32_t headerMs = 0;
+    uint32_t downloadMs = 0;
+    size_t received = 0;
+    uint32_t expectedBytes = 0;
+  };
+
+  // Keeps the buffer alive while a response streams from it; the destructor
+  // runs when the HTTP response is finished or aborted.
   struct ImageLease
   {
-    ImageLease(ReolinkCamera* owner, uint8_t bufferIndex)
-        : camera(owner), index(bufferIndex) {}
+    ImageLease(ReolinkCamera* owner, uint8_t bufferIndex, size_t imageSize)
+        : camera(owner), index(bufferIndex), size(imageSize), startedAt(millis()) {}
     ~ImageLease()
     {
+      Serial.printf("Camera image transfer ended: %lu/%lu bytes supplied to HTTP response in %lu ms\n",
+                    static_cast<unsigned long>(provided),
+                    static_cast<unsigned long>(size),
+                    static_cast<unsigned long>(millis() - startedAt));
       camera->releaseReader(index);
     }
     ReolinkCamera* camera;
     uint8_t index;
+    size_t size;
+    uint32_t startedAt;
+    size_t provided = 0;
   };
 
   Preferences preferences_;
@@ -434,6 +508,16 @@ private:
   std::atomic<uint32_t> version_{0};
   std::atomic<uint32_t> lastSuccessMs_{0};
   std::atomic<uint32_t> imageDimensions_{0};
+  // Incremented on every configuration change so the camera task can notice it
+  // and discard the adaptive state and an in-flight fetch of the old camera.
+  std::atomic<uint32_t> configRevision_{0};
+  std::atomic<uint8_t> resolutionLevel_{0};
+  std::atomic<uint32_t> lastFetchMs_{0};
+  std::atomic<uint32_t> lastFetchBytes_{0};
+  std::atomic<bool> lastFetchAvailable_{false};
+  std::atomic<uint32_t> downloadTimeoutMs_{20000};
+  CameraAdaptive adaptive_{SNAPSHOT_INTERVAL_MS};
+  CameraRefresh refresh_{};
 
   static void taskEntry(void* context)
   {
@@ -442,8 +526,23 @@ private:
 
   void cameraTask()
   {
+    uint32_t revision = configRevision_.load(std::memory_order_acquire);
+    uint32_t retryDelayMs = 3000;
     for (;;)
     {
+      const uint32_t currentRevision = configRevision_.load(std::memory_order_acquire);
+      if (currentRevision != revision)
+      {
+        revision = currentRevision;
+        adaptive_.reset();
+        resolutionLevel_.store(0, std::memory_order_release);
+        lastFetchMs_.store(0, std::memory_order_release);
+        lastFetchBytes_.store(0, std::memory_order_release);
+        lastFetchAvailable_.store(false, std::memory_order_release);
+        downloadTimeoutMs_.store(adaptive_.downloadTimeoutMs(), std::memory_order_release);
+        retryDelayMs = 3000;
+        busyRetries_ = 0;
+      }
       CameraSettings current{};
       if (!copySettings(current))
       {
@@ -462,13 +561,27 @@ private:
       }
 
       const TickType_t pollStartedAt = xTaskGetTickCount();
-      const bool retrySoon = pollSnapshot(current);
+      const PollResult result = pollSnapshot(current, revision);
       const TickType_t elapsed = xTaskGetTickCount() - pollStartedAt;
-      const TickType_t interval = pdMS_TO_TICKS(
-          retrySoon ? SNAPSHOT_BUSY_RETRY_MS : SNAPSHOT_INTERVAL_MS);
-      if (elapsed < interval)
+      if (result == PollResult::TransientFailure)
       {
-        ulTaskNotifyTake(pdTRUE, interval - elapsed);
+        // Back off 3 s, 6 s, 10 s, ...; any notification (for example new settings) ends the wait.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(retryDelayMs));
+        retryDelayMs = std::min(retryDelayMs * 2, MAX_FAILURE_RETRY_MS);
+      }
+      else if (result == PollResult::Busy)
+      {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(SNAPSHOT_BUSY_RETRY_MS));
+      }
+      else
+      {
+        // The interval counts from the start of the poll, so a slow fetch does not delay the next one.
+        retryDelayMs = 3000;
+        const TickType_t interval = pdMS_TO_TICKS(SNAPSHOT_INTERVAL_MS);
+        if (elapsed < interval)
+        {
+          ulTaskNotifyTake(pdTRUE, interval - elapsed);
+        }
       }
     }
   }
@@ -504,8 +617,7 @@ private:
     return matches;
   }
 
-  // Returns true when the buffer was busy and the poll should be retried soon.
-  bool pollSnapshot(const CameraSettings& settings)
+  PollResult pollSnapshot(const CameraSettings& settings, uint32_t revision)
   {
     const State previousState = state_.load(std::memory_order_acquire);
     state_.store(State::Connecting, std::memory_order_release);
@@ -521,21 +633,52 @@ private:
           ++busyRetries_ < MAX_BUSY_RETRIES)
       {
         state_.store(previousState, std::memory_order_release);
-        return true;
+        return PollResult::Busy;
       }
       fail(reserveError == SnapshotError::None
                ? SnapshotError::BufferBusy
                : reserveError);
-      return false;
+      return PollResult::Normal;
     }
     busyRetries_ = 0;
 
     size_t imageSize = 0;
     SnapshotError error = SnapshotError::None;
-    if (!fetchSnapshot(settings, target, imageSize, error))
+    FetchMetrics metrics{};
+    const uint8_t requestLevel = adaptive_.level();
+    const bool fetched = fetchSnapshot(settings, target, imageSize, error, metrics);
+    // The settings changed during the fetch, so this result belongs to the old camera.
+    if (revision != configRevision_.load(std::memory_order_acquire))
     {
+      return PollResult::Busy;
+    }
+    lastFetchMs_.store(metrics.totalMs, std::memory_order_release);
+    lastFetchBytes_.store(static_cast<uint32_t>(metrics.received), std::memory_order_release);
+    lastFetchAvailable_.store(true, std::memory_order_release);
+    if (!fetched)
+    {
+      // Only a transfer that was slow or too large, not one that never started,
+      // says something about the resolution. A partial JPEG also reveals the
+      // size the full image was expected to have.
+      const bool transferEvidence =
+          (error == SnapshotError::SnapshotTimeout && metrics.received > 0) ||
+          error == SnapshotError::SnapshotTooLarge;
+      const bool expectedImageSize =
+          error == SnapshotError::SnapshotTooLarge ||
+          (error == SnapshotError::SnapshotTimeout && metrics.received >= 2 &&
+           target[0] == 0xFF && target[1] == 0xD8);
+      adaptive_.transferFailure(millis(), metrics.totalMs, transferEvidence,
+                                expectedImageSize ? metrics.expectedBytes : 0);
+      reportAdaptive(requestLevel, metrics);
       fail(error);
-      return false;
+      const int16_t httpStatus = lastHttpStatus_.load(std::memory_order_acquire);
+      return error == SnapshotError::ConnectionFailed ||
+              error == SnapshotError::SnapshotTimeout ||
+              error == SnapshotError::InvalidJpeg ||
+              error == SnapshotError::SnapshotTooLarge ||
+              (error == SnapshotError::HttpFailed &&
+               (httpStatus == 408 || httpStatus == 429 || httpStatus >= 500))
+          ? PollResult::TransientFailure : PollResult::Normal;
     }
     uint16_t imageWidth = 0;
     uint16_t imageHeight = 0;
@@ -545,12 +688,12 @@ private:
     if (xSemaphoreTake(snapshotMutex_, portMAX_DELAY) != pdTRUE)
     {
       fail(SnapshotError::BufferBusy);
-      return false;
+      return PollResult::Busy;
     }
     if (!isCurrentSettings(settings))
     {
       xSemaphoreGive(snapshotMutex_);
-      return false;
+      return PollResult::Busy;
     }
     buffers_[targetIndex].size = imageSize;
     activeBuffer_ = static_cast<int8_t>(targetIndex);
@@ -558,13 +701,33 @@ private:
         ? (static_cast<uint32_t>(imageWidth) << 16) | imageHeight
         : 0;
     imageDimensions_.store(dimensions, std::memory_order_release);
-    lastSuccessMs_.store(millis(), std::memory_order_release);
+    const uint32_t successMs = millis();
+    refresh_.recordSuccess(successMs);
+    lastSuccessMs_.store(successMs, std::memory_order_release);
     version_.fetch_add(1, std::memory_order_acq_rel);
     imageAvailable_.store(true, std::memory_order_release);
     xSemaphoreGive(snapshotMutex_);
+    adaptive_.success(millis(), metrics.totalMs, metrics.headerMs, metrics.downloadMs,
+                      static_cast<uint32_t>(imageSize));
+    reportAdaptive(requestLevel, metrics);
     lastError_.store(SnapshotError::None, std::memory_order_release);
     state_.store(State::Available, std::memory_order_release);
-    return false;
+    return PollResult::Normal;
+  }
+
+  void reportAdaptive(uint8_t requestLevel, const FetchMetrics& metrics)
+  {
+    resolutionLevel_.store(adaptive_.level(), std::memory_order_release);
+    downloadTimeoutMs_.store(adaptive_.downloadTimeoutMs(), std::memory_order_release);
+    Serial.printf("Camera fetch: level %u, %lu bytes, total %lu ms, headers %lu ms, "
+                  "download %lu ms; next level %u, download timeout %lu ms\n",
+                  static_cast<unsigned>(requestLevel),
+                  static_cast<unsigned long>(metrics.received),
+                  static_cast<unsigned long>(metrics.totalMs),
+                  static_cast<unsigned long>(metrics.headerMs),
+                  static_cast<unsigned long>(metrics.downloadMs),
+                  static_cast<unsigned>(adaptive_.level()),
+                  static_cast<unsigned long>(adaptive_.downloadTimeoutMs()));
   }
 
   uint8_t* reserveTarget(uint8_t& index)
@@ -629,8 +792,11 @@ private:
   bool fetchSnapshot(const CameraSettings& settings,
                      uint8_t* target,
                      size_t& imageSize,
-                     SnapshotError& error)
+                     SnapshotError& error,
+                     FetchMetrics& metrics)
   {
+    const uint32_t startedAt = millis();
+    lastHttpStatus_.store(0, std::memory_order_release);
     char encodedUsername[sizeof(settings.username) * 3]{};
     char encodedPassword[sizeof(settings.password) * 3]{};
     if (!urlEncode(settings.username, encodedUsername, sizeof(encodedUsername)) ||
@@ -656,11 +822,25 @@ private:
       error = SnapshotError::UrlTooLong;
       return false;
     }
+    if (adaptive_.level() != 0)
+    {
+      // Level 0 sends no size and keeps the camera's native resolution.
+      const CameraAdaptive::Resolution resolution = adaptive_.resolution();
+      const int added = snprintf(url + urlLength, sizeof(url) - urlLength,
+                                 "&width=%u&height=%u",
+                                 static_cast<unsigned>(resolution.width),
+                                 static_cast<unsigned>(resolution.height));
+      if (added < 0 || static_cast<size_t>(added) >= sizeof(url) - urlLength)
+      {
+        error = SnapshotError::UrlTooLong;
+        return false;
+      }
+    }
 
     WiFiClient client;
     HTTPClient http;
-    http.setConnectTimeout(5000);
-    http.setTimeout(10000);
+    http.setConnectTimeout(adaptive_.connectTimeoutMs());
+    http.setTimeout(static_cast<uint16_t>(adaptive_.headerTimeoutMs()));
     http.setReuse(false);
     http.useHTTP10(true);
     if (!http.begin(client, url))
@@ -670,6 +850,9 @@ private:
     }
     http.addHeader("Accept", "image/jpeg");
     const int responseCode = http.GET();
+    // GET() returns after the response headers, so this is the time to first byte.
+    metrics.headerMs = millis() - startedAt;
+    metrics.totalMs = metrics.headerMs;
     lastHttpStatus_.store(
         responseCode > 0 ? static_cast<int16_t>(responseCode) : 0,
         std::memory_order_release);
@@ -683,21 +866,30 @@ private:
     }
 
     const int contentLength = http.getSize();
+    if (contentLength > 0)
+    {
+      metrics.expectedBytes = static_cast<uint32_t>(contentLength);
+    }
     if (contentLength > static_cast<int>(MAX_JPEG_SIZE))
     {
       http.end();
       error = SnapshotError::SnapshotTooLarge;
       return false;
     }
-    // HTTPClient::writeToStream has no overall timeout, so a stalled camera
-    // connection could block this task forever. Read with a hard deadline.
+    // Check the deadline even while data is arriving; read only available bytes.
     WiFiClient* stream = http.getStreamPtr();
     const uint32_t downloadStartedAt = millis();
+    const uint32_t downloadTimeout = adaptive_.downloadTimeoutMs();
     size_t received = 0;
     bool overflow = false;
     bool timedOut = false;
     while (contentLength < 0 || received < static_cast<size_t>(contentLength))
     {
+      if (millis() - downloadStartedAt >= downloadTimeout)
+      {
+        timedOut = true;
+        break;
+      }
       const int available = stream->available();
       if (available > 0)
       {
@@ -707,24 +899,33 @@ private:
           overflow = true;
           break;
         }
-        const size_t chunk = std::min(static_cast<size_t>(available), room);
-        const size_t count = stream->readBytes(target + received, chunk);
-        received += count;
+        size_t chunk = std::min(static_cast<size_t>(available), room);
+        if (contentLength >= 0)
+        {
+          chunk = std::min(chunk, static_cast<size_t>(contentLength) - received);
+        }
+        const int count = stream->read(target + received, chunk);
+        if (count > 0)
+        {
+          received += static_cast<size_t>(count);
+        }
+        else
+        {
+          delay(5);
+        }
         continue;
       }
       if (!stream->connected())
       {
         break;
       }
-      if (millis() - downloadStartedAt >= SNAPSHOT_DOWNLOAD_TIMEOUT_MS)
-      {
-        timedOut = true;
-        break;
-      }
       delay(5);
     }
     http.end();
 
+    metrics.received = received;
+    metrics.downloadMs = millis() - downloadStartedAt;
+    metrics.totalMs = millis() - startedAt;
     imageSize = received;
     if (overflow)
     {
@@ -760,6 +961,8 @@ private:
     buffers_[1].size = 0;
     imageDimensions_.store(0, std::memory_order_release);
     imageAvailable_.store(false, std::memory_order_release);
+    refresh_.clear();
+    lastFetchAvailable_.store(false, std::memory_order_release);
     version_.fetch_add(1, std::memory_order_acq_rel);
     lastSuccessMs_.store(0, std::memory_order_release);
     xSemaphoreGive(snapshotMutex_);

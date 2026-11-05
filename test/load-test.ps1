@@ -185,7 +185,7 @@ function Invoke-StressStage {
 
 Write-Host '=== AREDN realistic browser stress test ===' -ForegroundColor Cyan
 Write-Host "Target: $BaseUri"
-Write-Host "Stages: 1, 2, 4 ... up to $MaxClients clients"
+Write-Host "Stages: 1, 2, 4 .. up to $MaxClients clients"
 Write-Host "Each stage: $StageSeconds seconds, one message every $MessageIntervalSeconds seconds"
 Write-Host 'Press Ctrl+C to stop; active test jobs are cleaned up.'
 Write-Host ''
