@@ -588,6 +588,11 @@ static const char CAMERA_PAGE[] PROGMEM = R"AREDN_CAMERA(
 
       const hours = Math.floor(totalMinutes / 60);
       const minutes = String(totalMinutes % 60).padStart(2, '0');
+      if (hours >= 24) {
+        const days = Math.floor(hours / 24);
+        const remainingHours = hours % 24;
+        return `${days} d ${remainingHours} h ${minutes} min ${seconds} s`;
+      }
       return `${hours} h ${minutes} min ${seconds} s`;
     }
 

@@ -15,8 +15,28 @@ function element() {
   };
 }
 
+function elapsedTimeFormatter(source, label) {
+  const functionSource = source.match(/function formatElapsedTime\(totalSeconds\) \{[\s\S]*?\n    \}/);
+  assert.ok(functionSource, `${label} must define formatElapsedTime`);
+  const context = vm.createContext({});
+  vm.runInContext(functionSource[0], context);
+  return totalSeconds => vm.runInContext(`formatElapsedTime(${totalSeconds})`, context);
+}
+
 async function main() {
   const source = fs.readFileSync(path.join(__dirname, '..', 'CameraPage.h'), 'utf8');
+  const setupSource = fs.readFileSync(path.join(__dirname, '..', 'CameraSetupPage.h'), 'utf8');
+  const formatters = [
+    elapsedTimeFormatter(source, 'camera page'),
+    elapsedTimeFormatter(setupSource, 'camera setup page')
+  ];
+  for (const formatElapsedTime of formatters) {
+    assert.equal(formatElapsedTime(59), '59 s');
+    assert.equal(formatElapsedTime(23 * 60 * 60), '23 h 00 min 00 s');
+    assert.equal(formatElapsedTime(24 * 60 * 60), '1 d 0 h 00 min 00 s');
+    assert.equal(formatElapsedTime(26 * 60 * 60 + 3 * 60 + 4), '1 d 2 h 03 min 04 s');
+    assert.equal(formatElapsedTime(89 * 60 * 60 + 21 * 60 + 21), '3 d 17 h 21 min 21 s');
+  }
   const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
   const elements = new Map();
   const document = {
