@@ -40,7 +40,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
   </style>
 </head>
 <body>
-  <main id="lobby">
+  <main id="start-screen">
     <a href="/">← AREDN Services</a><h1>MESH INVADERS</h1>
     <p class="tagline"><strong>Defend the mesh!</strong><br><br>Move with ← / → or A / D; fire with Space. On touchscreens use the buttons below the game.</p>
     <button id="start" type="button">Start game</button>
@@ -72,6 +72,8 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     const $ = id => document.getElementById(id);
     const canvas = $('canvas'), ctx = canvas.getContext('2d');
     const keys = { left: false, right: false, fire: false };
+    const keyboardKeys = { left: false, right: false, fire: false };
+    const touchKeys = { left: false, right: false, fire: false };
     let game = null, lastFrame = 0, animation = 0, saving = false;
     function showScores(data) {
       const body = $('scores'); body.replaceChildren();
@@ -91,7 +93,16 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
         showScores(await response.json()); $('status').textContent = '';
       } catch (error) { $('status').textContent = 'Highscores unavailable: ' + error.message; }
     }
-    function resetControls() { keys.left = keys.right = keys.fire = false; }
+    function syncControls() {
+      keys.left = keyboardKeys.left || touchKeys.left;
+      keys.right = keyboardKeys.right || touchKeys.right;
+      keys.fire = keyboardKeys.fire || touchKeys.fire;
+    }
+    function resetControls() {
+      keyboardKeys.left = keyboardKeys.right = keyboardKeys.fire = false;
+      touchKeys.left = touchKeys.right = touchKeys.fire = false;
+      syncControls();
+    }
     const WAVE_NAMES = [
       'CQ CQ – Station on the air', 'QRM – Interference on frequency', 'QSB – Signal fading',
       'QRN – Static crashes', 'Sunspot minimum', 'Ionospheric storm', 'Deep-space signal',
@@ -123,7 +134,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
         wave: createWave(1), shields: makeShields(), shots: [], enemyShots: [],
         fireTimer: 0, enemyTimer: 1, invulnerable: 0, bonus: null, bonusTimer: 12, bonusNotice: null,
         lastBonusKind: 'life', time: 0, banner: waveBanner(1), boss: null };
-      $('lobby').hidden = true; $('game').hidden = false; $('result').hidden = true;
+      $('start-screen').hidden = true; $('game').hidden = false; $('result').hidden = true;
       $('save-status').textContent = ''; $('score-form').hidden = false;
       lastFrame = 0; cancelAnimationFrame(animation); animation = requestAnimationFrame(frame);
     }
@@ -290,15 +301,15 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       update(dt); draw();
       if (!game.over) animation = requestAnimationFrame(frame);
     }
-    function lobby() {
-      cancelAnimationFrame(animation); game = null; resetControls(); $('game').hidden = true; $('lobby').hidden = false;
+    function showStartScreen() {
+      cancelAnimationFrame(animation); game = null; resetControls(); $('game').hidden = true; $('start-screen').hidden = false;
       if (document.fullscreenElement === $('game')) document.exitFullscreen().catch(error => { $('status').textContent = error.message; });
       loadScores(); $('start').focus();
     }
     $('start').addEventListener('click', startGame);
     $('restart').addEventListener('click', startGame);
-    $('quit').addEventListener('click', () => { if (confirm('Quit this game without saving?')) lobby(); });
-    $('back').addEventListener('click', lobby);
+    $('quit').addEventListener('click', () => { if (confirm('Quit this game without saving?')) showStartScreen(); });
+    $('back').addEventListener('click', showStartScreen);
     $('fullscreen').addEventListener('click', async () => {
       try {
         if (document.fullscreenElement) await document.exitFullscreen();
@@ -322,22 +333,25 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     document.addEventListener('keydown', event => {
       if (!game || game.over) return;
       const key = event.key.toLowerCase();
-      if (key === 'arrowleft' || key === 'a') keys.left = true;
-      else if (key === 'arrowright' || key === 'd') keys.right = true;
-      else if (key === ' ' || key === 'spacebar') { if (!event.repeat) keys.fire = true; }
+      if (key === 'arrowleft' || key === 'a') keyboardKeys.left = true;
+      else if (key === 'arrowright' || key === 'd') keyboardKeys.right = true;
+      else if (key === ' ' || key === 'spacebar') { if (!event.repeat) keyboardKeys.fire = true; }
       else return;
+      syncControls();
       event.preventDefault();
     });
     document.addEventListener('keyup', event => {
       const key = event.key.toLowerCase();
-      if (key === 'arrowleft' || key === 'a') keys.left = false;
-      if (key === 'arrowright' || key === 'd') keys.right = false;
-      if (key === ' ' || key === 'spacebar') keys.fire = false;
+      if (key === 'arrowleft' || key === 'a') keyboardKeys.left = false;
+      if (key === 'arrowright' || key === 'd') keyboardKeys.right = false;
+      if (key === ' ' || key === 'spacebar') keyboardKeys.fire = false;
+      syncControls();
     });
     document.querySelectorAll('[data-control]').forEach(button => {
       const control = button.dataset.control;
-      button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); keys[control] = true; });
-      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(type, () => { keys[control] = false; });
+      button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); touchKeys[control] = true; syncControls(); });
+      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'])
+        button.addEventListener(type, () => { touchKeys[control] = false; syncControls(); });
     });
     window.addEventListener('blur', resetControls);
     document.addEventListener('visibilitychange', () => { if (document.hidden) resetControls(); lastFrame = 0; });
