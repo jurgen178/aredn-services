@@ -1654,15 +1654,6 @@ void sendMeshScores(AsyncWebServerRequest* request)
 void registerRoutes()
 {
   // Route handlers are asynchronous; long-running storage operations use the board's mutex.
-  server.on("/mesh-invaders", HTTP_GET, [](AsyncWebServerRequest* request)
-  {
-    if (request->url() != "/mesh-invaders") { request->send(404); return; }
-    meshPageAccessCount.fetch_add(1, std::memory_order_relaxed);
-    AsyncWebServerResponse* response = request->beginResponse_P(
-        200, "text/html; charset=utf-8", MESH_INVADERS_PAGE);
-    response->addHeader("Cache-Control", "no-cache, must-revalidate");
-    request->send(response);
-  });
   server.on("/mesh-invaders/api/scores", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     sendMeshScores(request);
@@ -1703,6 +1694,15 @@ void registerRoutes()
       return;
     }
     sendMeshScores(request);
+  });
+  server.on("/mesh-invaders", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (request->url() != "/mesh-invaders") { request->send(404); return; }
+    meshPageAccessCount.fetch_add(1, std::memory_order_relaxed);
+    AsyncWebServerResponse* response = request->beginResponse_P(
+        200, "text/html; charset=utf-8", MESH_INVADERS_PAGE);
+    response->addHeader("Cache-Control", "no-cache, must-revalidate");
+    request->send(response);
   });
   server.on("/setup/mesh-invaders", HTTP_GET, [](AsyncWebServerRequest* request)
   {

@@ -28,7 +28,12 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     .controls button { min-width: 72px; min-height: 48px; touch-action: none; user-select: none; }
     #result { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgb(0 0 0 / 80%); }
     .result-card { max-width: 420px; width: 100%; padding: 20px; background: #14283a; border: 1px solid #7df6ac; }
-    .result-card input { padding: 8px; max-width: 100%; }
+    .result-card form { margin-top: 18px; }
+    .result-card label { display: block; margin-bottom: 22px; line-height: 1.4; }
+    .result-card .score-entry { display: flex; flex-wrap: wrap; gap: 10px; }
+    .result-card input { flex: 1 1 160px; min-width: 0; padding: 8px; }
+    .result-card input:focus-visible { outline-offset: 1px; }
+    #save-status { margin: 12px 0; }
     #game { position: relative; }
   </style>
 </head>
@@ -51,9 +56,11 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     </div>
     <div id="result" hidden><div class="result-card">
       <h2>Game over</h2><p id="final-score"></p>
-      <form id="score-form"><label for="name">Player name (1–16 letters, numbers, . _ -)</label><br>
-        <input id="name" maxlength="16" pattern="[A-Za-z0-9_.\-]{1,16}" required autocomplete="nickname">
-        <button type="submit">Save score</button>
+      <form id="score-form"><label for="name">Player name (1–16 letters, numbers, . _ -)</label>
+        <div class="score-entry">
+          <input id="name" maxlength="16" pattern="[A-Za-z0-9_.\-]{1,16}" required autocomplete="nickname">
+          <button type="submit">Save score</button>
+        </div>
       </form><p id="save-status" role="status"></p>
       <button id="back" type="button">Back to highscores</button>
     </div></div>

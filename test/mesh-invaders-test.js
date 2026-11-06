@@ -45,6 +45,19 @@ function environment(script) {
 }
 
 async function main() {
+  const firmware = fs.readFileSync(path.join(__dirname, '..', 'aredn-services.ino'), 'utf8');
+  const routes = [...firmware.matchAll(/server\.on\("([^"]+)",\s*HTTP_(GET|POST)/g)]
+    .map(([, uri, method]) => ({ uri, method }));
+  function resolveRoute(url, method) {
+    return routes.find(route => route.method === method &&
+      (url === route.uri || url.startsWith(route.uri + '/')))?.uri;
+  }
+  assert.equal(resolveRoute('/mesh-invaders', 'GET'), '/mesh-invaders');
+  assert.equal(resolveRoute('/mesh-invaders/api/scores', 'GET'), '/mesh-invaders/api/scores');
+  assert.equal(resolveRoute('/mesh-invaders/api/status', 'GET'), '/mesh-invaders/api/status');
+  assert.equal(resolveRoute('/mesh-invaders/api/scores', 'POST'), '/mesh-invaders/api/scores');
+  assert.equal(resolveRoute('/setup/mesh-invaders', 'GET'), '/setup/mesh-invaders');
+  assert.equal(resolveRoute('/setup/api/mesh-invaders/scores', 'POST'), '/setup/api/mesh-invaders/scores');
   const game = environment(pageScript('MeshInvadersPage.h'));
   const run = text => vm.runInContext(text, game.context);
   run('startGame()');
