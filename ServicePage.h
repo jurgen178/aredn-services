@@ -105,7 +105,7 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
     <div class="header-inner">
       <p class="header-label">AREDN · Local services</p>
       <h1>AREDN Services</h1>
-      <p>Choose a service available on this local AREDN node.</p>
+      <p>Choose a service available on this AREDN node.</p>
       <p class="experimental-note">EXPERIMENTAL ESP32 WEB SERVICE · <a href="https://github.com/jurgen178/aredn-services" target="_blank" rel="noopener noreferrer">Project on GitHub</a></p>
     </div>
   </header>
@@ -129,10 +129,10 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
       <a class="service" href="/mesh-invaders">
         <span class="service-mark" aria-hidden="true">I</span>
         <h2>Mesh Invaders</h2>
-        <p>Defend the mesh in a retro arcade game.</p>
+        <p>Aliens are stealing bandwidth and heading for your node. Show them RF stands for Rapid Fire!</p>
       </a>
     </nav>
-    <footer>Services are hosted locally.</footer>
+    <footer></footer>
   </main>
   <script>
     async function synchronizeDeviceTime() {
