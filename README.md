@@ -102,7 +102,7 @@ The service portal is available at `/`. The message board is served at `/msg-boa
 
 ### Mesh Invaders
 
-Play in a browser using the arrow keys or A/D and Space, or use the on-screen controls. Destroy the descending formation, avoid enemy fire, and protect yourself behind destructible shields. The occasional HTTPS invader moves from right to left and is worth 100 points; regular invaders are worth 10. Clear a wave to advance, and use the optional fullscreen button where supported. The game has no audio and runs locally in the browser after the page loads.
+Play in a browser using the arrow keys or A/D and Space, or use the on-screen controls. Destroy the descending formation, avoid enemy fire, and protect yourself behind destructible shields. The occasional HTTPS invader moves from right to left and is worth 100 points; regular invaders are worth 10. Clear a wave to advance; each wave shows a ham-radio style banner (CQ CQ, QRM, QSB, …) and the invaders get noticeably faster. From wave 4 a friendly "73" UFO alternates with the HTTPS UFO and grants an extra life (maximum 5; 50 points at full lives). From wave 5 the invaders briefly fade in and out (QSB), and game over reads "QRT". Use the optional fullscreen button where supported. The game has no audio and runs locally in the browser after the page loads.
 
 Scores are submitted after game over. Player names contain 1–16 ASCII letters, numbers, dots, underscores or hyphens; names are compared without regard to case. The server keeps the best result per name and the top ten players. Because scores are submitted by the browser, they are not cheat-proof and the list is intended for a trusted local network. If submission fails, reconnect and retry before leaving the game-over screen.
 

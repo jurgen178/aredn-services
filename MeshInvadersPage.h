@@ -18,6 +18,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     h1 { letter-spacing: .1em; color: #7df6ac; } h2 { margin-top: 24px; }
     table { width: 100%; border-collapse: collapse; } th, td { padding: 8px; text-align: left; border-bottom: 1px solid #385347; }
     #status, #save-status { min-height: 1.5em; color: #ffd66d; }
+    #qrt { color: #a9eec1; font-style: italic; }
     #game { width: 100%; height: 100vh; height: 100dvh; display: flex; flex-direction: column; padding: 8px; gap: 6px; background: #080e19; }
     #game:fullscreen { width: 100%; height: 100%; }
     .gamebar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
@@ -40,7 +41,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
 <body>
   <main id="lobby">
     <a href="/">← AREDN Services</a><h1>MESH INVADERS</h1>
-    <p>Defend the mesh! Move with ← / → or A / D; fire with Space. On touchscreens use the buttons below the game. Shoot the HTTPS UFO for 100 bonus points.</p>
+    <p>Defend the mesh! Move with ← / → or A / D; fire with Space. On touchscreens use the buttons below the game.</p>
     <button id="start" type="button">Start game</button>
     <h2>Highscores</h2>
     <table><thead><tr><th>Rank</th><th>Player</th><th>Score</th></tr></thead><tbody id="scores"></tbody></table>
@@ -55,7 +56,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       <button type="button" data-control="right" aria-label="Move right">▶</button>
     </div>
     <div id="result" hidden><div class="result-card">
-      <h2>Game over</h2><p id="final-score"></p>
+      <h2>Game over</h2><p id="final-score"></p><p id="qrt">QRT – station closed. 73!</p>
       <form id="score-form"><label for="name">Player name (1–16 letters, numbers, . _ -)</label>
         <div class="score-entry">
           <input id="name" maxlength="16" pattern="[A-Za-z0-9_.\-]{1,16}" required autocomplete="nickname">
@@ -89,11 +90,16 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       } catch (error) { $('status').textContent = 'Highscores unavailable: ' + error.message; }
     }
     function resetControls() { keys.left = keys.right = keys.fire = false; }
+    const WAVE_NAMES = ['CQ CQ – Station on the air', 'QRM – Interference on frequency', 'QSB – Signal fading',
+      'QRN – Static crashes', 'Sunspot minimum', 'Ionospheric storm', 'Contest weekend'];
+    function waveBanner(level) {
+      return { text: 'WAVE ' + level, name: WAVE_NAMES[level - 1] || 'Pile-up!', remaining: 2.5 };
+    }
     function createWave(level) {
       const enemies = [];
       for (let row = 0; row < 4; row++) for (let col = 0; col < 9; col++)
         enemies.push({ x: 110 + col * 62, y: 90 + row * 38, w: 30, h: 22 });
-      return { enemies, direction: 1, step: 0, speed: Math.min(115, 25 + level * 8) };
+      return { enemies, direction: 1, step: 0, speed: Math.min(150, 25 + level * 12) };
     }
     function makeShields() {
       const shields = [];
@@ -106,7 +112,8 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       resetControls();
       game = { score: 0, lives: 3, level: 1, player: { x: 380, y: 555, w: 40, h: 20 },
         wave: createWave(1), shields: makeShields(), shots: [], enemyShots: [],
-        fireTimer: 0, enemyTimer: 1, invulnerable: 0, bonus: null, bonusTimer: 12, bonusNotice: null };
+        fireTimer: 0, enemyTimer: 1, invulnerable: 0, bonus: null, bonusTimer: 12, bonusNotice: null,
+        lastBonusKind: 'life', time: 0, banner: waveBanner(1) };
       $('lobby').hidden = true; $('game').hidden = false; $('result').hidden = true;
       $('save-status').textContent = ''; $('score-form').hidden = false;
       lastFrame = 0; cancelAnimationFrame(animation); animation = requestAnimationFrame(frame);
@@ -120,13 +127,23 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       const g = game, p = g.player, wave = g.wave;
       p.x = Math.max(0, Math.min(800 - p.w, p.x + ((keys.right ? 1 : 0) - (keys.left ? 1 : 0)) * 300 * dt));
       g.invulnerable = Math.max(0, g.invulnerable - dt);
-      g.fireTimer -= dt; g.enemyTimer -= dt; g.bonusTimer -= dt;
-      if (keys.fire && g.fireTimer <= 0) { g.shots.push({ x: p.x + 18, y: p.y - 12, w: 4, h: 12 }); g.fireTimer = .3; }
+      g.fireTimer -= dt; g.enemyTimer -= dt; g.bonusTimer -= dt; g.time += dt;
+      if (g.banner) {
+        g.banner.remaining -= dt;
+        if (g.banner.remaining <= 0) g.banner = null;
+      }
+      // One shot per key press or tap; holding the button does not auto-fire.
+      if (keys.fire) { keys.fire = false; g.shots.push({ x: p.x + 18, y: p.y - 12, w: 4, h: 12 }); }
       if (g.bonusNotice) {
         g.bonusNotice.remaining -= dt;
         if (g.bonusNotice.remaining <= 0) g.bonusNotice = null;
       }
-      if (!g.bonus && g.bonusTimer <= 0) { g.bonus = { x: 800, y: 38, w: 100, h: 32 }; }
+      if (!g.bonus && g.bonusTimer <= 0) {
+        // From wave 4 the friendly 73 UFO alternates with the HTTPS UFO.
+        const kind = g.level >= 4 && g.lastBonusKind === 'https' ? 'life' : 'https';
+        g.lastBonusKind = kind;
+        g.bonus = { x: 800, y: 38, w: 100, h: 32, kind };
+      }
       if (g.bonus) {
         g.bonus.x -= 100 * dt;
         if (g.bonus.x + g.bonus.w < 0) { g.bonus = null; g.bonusTimer = 18 + Math.random() * 12; }
@@ -146,8 +163,12 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
         for (const shield of g.shields) if (shield.hp && hit(shot, shield)) { shield.hp--; shot.dead = true; break; }
         if (!shot.dead && g.bonus && hit(shot, g.bonus)) {
           shot.dead = true;
-          g.bonusNotice = { x: g.bonus.x + g.bonus.w / 2, y: g.bonus.y + 16, remaining: 1.5 };
-          g.bonus = null; g.bonusTimer = 18 + Math.random() * 12; g.score += 100;
+          let text = '+100';
+          if (g.bonus.kind === 'life') {
+            if (g.lives < 5) { g.lives++; text = '+1 LIFE'; } else { g.score += 50; text = '+50'; }
+          } else g.score += 100;
+          g.bonusNotice = { text, x: g.bonus.x + g.bonus.w / 2, y: g.bonus.y + 16, remaining: 1.5 };
+          g.bonus = null; g.bonusTimer = 18 + Math.random() * 12;
         }
         if (!shot.dead) {
           const index = wave.enemies.findIndex(e => hit(shot, e));
@@ -164,12 +185,16 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       }
       g.shots = g.shots.filter(s => !s.dead && s.y + s.h > 0);
       g.enemyShots = g.enemyShots.filter(s => !s.dead && s.y < 600);
-      if (!wave.enemies.length) { g.level++; g.wave = createWave(g.level); g.enemyShots = []; g.shots = []; }
+      if (!wave.enemies.length) {
+        g.level++; g.wave = createWave(g.level); g.enemyShots = []; g.shots = []; g.banner = waveBanner(g.level);
+      }
     }
     function draw() {
       const g = game; ctx.fillStyle = '#080e19'; ctx.fillRect(0, 0, 800, 600);
       ctx.fillStyle = '#7df6ac';
-      for (const e of g.wave.enemies) {
+      // QSB: from wave 5 the invaders briefly fade in and out every few seconds.
+      const fading = g.level >= 5 && g.time % 4 < 0.5 && Math.floor(g.time * 16) % 2 === 0;
+      for (const e of fading ? [] : g.wave.enemies) {
         ctx.fillRect(e.x + 5, e.y, 20, 5); ctx.fillRect(e.x, e.y + 5, 30, 12);
         ctx.fillRect(e.x + 3, e.y + 17, 7, 5); ctx.fillRect(e.x + 20, e.y + 17, 7, 5);
         ctx.fillStyle = '#080e19'; ctx.fillRect(e.x + 6, e.y + 8, 4, 4); ctx.fillRect(e.x + 20, e.y + 8, 4, 4); ctx.fillStyle = '#7df6ac';
@@ -182,24 +207,31 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       ctx.fillStyle = '#ff8b79'; for (const s of g.enemyShots) ctx.fillRect(s.x, s.y, s.w, s.h);
       if (g.bonus) {
         const { x, y } = g.bonus;
-        ctx.fillStyle = '#ffb36b';
+        const friendly = g.bonus.kind === 'life';
+        ctx.fillStyle = friendly ? '#80dfff' : '#ffb36b';
         ctx.fillRect(x + 32, y, 36, 4);
         ctx.fillRect(x + 24, y + 4, 52, 5);
         ctx.fillRect(x + 10, y + 9, 80, 5);
         ctx.fillRect(x, y + 14, 100, 10);
         ctx.fillRect(x + 10, y + 24, 80, 4);
         ctx.fillRect(x + 24, y + 28, 52, 4);
-        ctx.fillStyle = '#58322b';
+        ctx.fillStyle = friendly ? '#1d4a5c' : '#58322b';
         ctx.fillRect(x + 29, y + 4, 42, 5);
         ctx.fillStyle = '#fff2d6';
         ctx.font = 'bold 12px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('HTTPS', x + 50, y + 23);
+        ctx.fillText(friendly ? '73' : 'HTTPS', x + 50, y + 23);
         ctx.textAlign = 'left';
       }
       if (g.bonusNotice) {
         ctx.fillStyle = '#ffd66d'; ctx.font = 'bold 16px monospace'; ctx.textAlign = 'center';
-        ctx.fillText('+100', g.bonusNotice.x, g.bonusNotice.y - (1.5 - g.bonusNotice.remaining) * 12);
+        ctx.fillText(g.bonusNotice.text, g.bonusNotice.x, g.bonusNotice.y - (1.5 - g.bonusNotice.remaining) * 12);
+        ctx.textAlign = 'left';
+      }
+      if (g.banner) {
+        ctx.textAlign = 'center'; ctx.fillStyle = '#ffd66d';
+        ctx.font = 'bold 32px monospace'; ctx.fillText(g.banner.text, 400, 290);
+        ctx.font = 'bold 20px monospace'; ctx.fillStyle = '#d7f8e6'; ctx.fillText(g.banner.name, 400, 322);
         ctx.textAlign = 'left';
       }
       $('hud').textContent = 'Score ' + g.score + '  |  Lives ' + g.lives + '  |  Wave ' + g.level;
@@ -243,7 +275,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       const key = event.key.toLowerCase();
       if (key === 'arrowleft' || key === 'a') keys.left = true;
       else if (key === 'arrowright' || key === 'd') keys.right = true;
-      else if (key === ' ' || key === 'spacebar') keys.fire = true;
+      else if (key === ' ' || key === 'spacebar') { if (!event.repeat) keys.fire = true; }
       else return;
       event.preventDefault();
     });

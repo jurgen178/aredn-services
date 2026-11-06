@@ -132,7 +132,7 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
         <p>Defend the mesh in a retro arcade game.</p>
       </a>
     </nav>
-    <footer>Services are hosted locally by the AREDN Server.</footer>
+    <footer>Services are hosted locally.</footer>
   </main>
   <script>
     async function synchronizeDeviceTime() {
