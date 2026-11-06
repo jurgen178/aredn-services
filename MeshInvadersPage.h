@@ -16,7 +16,25 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid #ffd66d; outline-offset: 3px; }
     a { color: #a9eec1; } main { max-width: 680px; padding: 24px; margin: auto; }
     h1 { letter-spacing: .1em; color: #7df6ac; } h2 { margin-top: 24px; }
-    table { width: 100%; border-collapse: collapse; } th, td { padding: 8px; text-align: left; border-bottom: 1px solid #385347; }
+    .leaderboard { margin-top: 22px; padding: 18px; overflow: hidden; border: 1px solid #326d51; border-radius: 10px; background: linear-gradient(145deg, #162b3c, #0d1927); box-shadow: 0 0 24px rgb(125 246 172 / 8%), inset 0 0 22px rgb(125 246 172 / 3%); }
+    .leaderboard-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .leaderboard-heading h2 { margin: 0; color: #7df6ac; }
+    .leaderboard-heading span { color: #87a997; font: 700 .7rem monospace; letter-spacing: .12em; }
+    .leaderboard table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    .leaderboard th, .leaderboard td { padding: 10px 8px; text-align: left; border-bottom: 1px solid #294237; }
+    .leaderboard th { color: #87a997; background: #0b1521; font: 700 .72rem monospace; letter-spacing: .1em; text-transform: uppercase; }
+    .leaderboard th:last-child, .leaderboard .score-cell { text-align: right; }
+    .leaderboard tbody tr { transition: background-color .15s ease; }
+    .leaderboard tbody tr:hover { background: rgb(125 246 172 / 7%); }
+    .leaderboard tbody tr:last-child td { border-bottom: 0; }
+    .rank-cell { width: 64px; }
+    .rank-badge { display: inline-grid; width: 30px; height: 30px; place-items: center; border: 1px solid #426354; border-radius: 6px; color: #a9eec1; font: 700 .85rem monospace; }
+    .rank-1 .rank-badge { border-color: #ffd66d; color: #ffd66d; background: rgb(255 214 109 / 10%); box-shadow: 0 0 12px rgb(255 214 109 / 14%); }
+    .rank-2 .rank-badge { border-color: #c7d8d1; color: #e0eee8; }
+    .rank-3 .rank-badge { border-color: #c98b62; color: #e7a77b; }
+    .pilot-cell { font-weight: 700; }
+    .score-cell { color: #7df6ac; font: 700 1rem monospace; }
+    .empty-scores { margin: 16px 0 4px; color: #a9eec1; font-style: italic; }
     #status, #save-status { min-height: 1.5em; color: #ffd66d; }
     #qrt { color: #a9eec1; font-style: italic; }
     .tagline strong { color: #7df6ac; font-size: 1.15em; }
@@ -44,9 +62,12 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     <a href="/">← AREDN Services</a><h1>MESH INVADERS</h1>
     <p class="tagline"><strong>Defend the mesh!</strong><br><br>Move with ← / → or A / D; fire with Space. On touchscreens use the buttons below the game.</p>
     <button id="start" type="button">Start game</button>
-    <h2>Highscores</h2>
-    <table><thead><tr><th>Rank</th><th>Player</th><th>Score</th></tr></thead><tbody id="scores"></tbody></table>
-    <p id="empty" hidden>No scores yet. Be the first!</p><p id="status" role="status"></p>
+    <section class="leaderboard" aria-labelledby="leaderboard-title">
+      <div class="leaderboard-heading"><h2 id="leaderboard-title">Highscores</h2><span>TOP TEN PILOTS</span></div>
+      <table><thead><tr><th scope="col">Rank</th><th scope="col">Pilot</th><th scope="col">Score</th></tr></thead><tbody id="scores"></tbody></table>
+      <p id="empty" class="empty-scores" hidden>No scores yet. Be the first!</p>
+    </section>
+    <p id="status" role="status"></p>
   </main>
   <section id="game" aria-label="Mesh Invaders game" hidden>
     <div class="gamebar"><span id="hud"></span><span><button id="fullscreen" type="button">Fullscreen</button> <button id="quit" type="button">Quit</button></span></div>
@@ -78,9 +99,12 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       $('empty').hidden = data.scores.length !== 0;
       data.scores.forEach((entry, index) => {
         const row = document.createElement('tr');
-        [index + 1, entry.name, entry.score].forEach(value => {
-          const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell);
-        });
+        row.className = index < 3 ? 'rank-' + (index + 1) : '';
+        const rank = document.createElement('td'); rank.className = 'rank-cell';
+        const badge = document.createElement('span'); badge.className = 'rank-badge'; badge.textContent = index + 1;
+        rank.appendChild(badge); row.appendChild(rank);
+        const pilot = document.createElement('td'); pilot.className = 'pilot-cell'; pilot.textContent = entry.name; row.appendChild(pilot);
+        const score = document.createElement('td'); score.className = 'score-cell'; score.textContent = entry.score.toLocaleString('en-US'); row.appendChild(score);
         body.appendChild(row);
       });
     }

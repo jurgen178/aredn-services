@@ -65,6 +65,13 @@ async function main() {
   assert.equal(resolveRoute('/setup/api/mesh-invaders/scores', 'POST'), '/setup/api/mesh-invaders/scores');
   const game = environment(pageScript('MeshInvadersPage.h'));
   const run = text => vm.runInContext(text, game.context);
+  run("showScores({version: 1, scores: [{name: 'ACE', score: 12500}, {name: 'RADIO', score: 9000}, {name: 'MESH', score: 7000}, {name: 'NODE', score: 4000}]})");
+  const leaderboard = game.element('scores').children;
+  assert.equal(leaderboard.length, 4);
+  assert.equal(leaderboard[0].className, 'rank-1');
+  assert.equal(leaderboard[0].children[0].children[0].textContent, 1);
+  assert.equal(leaderboard[0].children[2].textContent, '12,500');
+  assert.equal(leaderboard[3].className, '');
   run('startGame()');
   assert.equal(run('game.lives'), 3);
   assert.equal(run('game.wave.enemies.length'), 36);
