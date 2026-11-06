@@ -72,8 +72,6 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     const $ = id => document.getElementById(id);
     const canvas = $('canvas'), ctx = canvas.getContext('2d');
     const keys = { left: false, right: false, fire: false };
-    const keyboardKeys = { left: false, right: false, fire: false };
-    const touchKeys = { left: false, right: false, fire: false };
     let game = null, lastFrame = 0, animation = 0, saving = false;
     function showScores(data) {
       const body = $('scores'); body.replaceChildren();
@@ -93,16 +91,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
         showScores(await response.json()); $('status').textContent = '';
       } catch (error) { $('status').textContent = 'Highscores unavailable: ' + error.message; }
     }
-    function syncControls() {
-      keys.left = keyboardKeys.left || touchKeys.left;
-      keys.right = keyboardKeys.right || touchKeys.right;
-      keys.fire = keyboardKeys.fire || touchKeys.fire;
-    }
-    function resetControls() {
-      keyboardKeys.left = keyboardKeys.right = keyboardKeys.fire = false;
-      touchKeys.left = touchKeys.right = touchKeys.fire = false;
-      syncControls();
-    }
+    function resetControls() { keys.left = keys.right = keys.fire = false; }
     const WAVE_NAMES = [
       'CQ CQ – Station on the air', 'QRM – Interference on frequency', 'QSB – Signal fading',
       'QRN – Static crashes', 'Sunspot minimum', 'Ionospheric storm', 'Deep-space signal',
@@ -333,25 +322,22 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     document.addEventListener('keydown', event => {
       if (!game || game.over) return;
       const key = event.key.toLowerCase();
-      if (key === 'arrowleft' || key === 'a') keyboardKeys.left = true;
-      else if (key === 'arrowright' || key === 'd') keyboardKeys.right = true;
-      else if (key === ' ' || key === 'spacebar') { if (!event.repeat) keyboardKeys.fire = true; }
+      if (key === 'arrowleft' || key === 'a') keys.left = true;
+      else if (key === 'arrowright' || key === 'd') keys.right = true;
+      else if (key === ' ' || key === 'spacebar') { if (!event.repeat) keys.fire = true; }
       else return;
-      syncControls();
       event.preventDefault();
     });
     document.addEventListener('keyup', event => {
       const key = event.key.toLowerCase();
-      if (key === 'arrowleft' || key === 'a') keyboardKeys.left = false;
-      if (key === 'arrowright' || key === 'd') keyboardKeys.right = false;
-      if (key === ' ' || key === 'spacebar') keyboardKeys.fire = false;
-      syncControls();
+      if (key === 'arrowleft' || key === 'a') keys.left = false;
+      if (key === 'arrowright' || key === 'd') keys.right = false;
+      if (key === ' ' || key === 'spacebar') keys.fire = false;
     });
     document.querySelectorAll('[data-control]').forEach(button => {
       const control = button.dataset.control;
-      button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); touchKeys[control] = true; syncControls(); });
-      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'])
-        button.addEventListener(type, () => { touchKeys[control] = false; syncControls(); });
+      button.addEventListener('pointerdown', event => { event.preventDefault(); button.setPointerCapture(event.pointerId); keys[control] = true; });
+      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) button.addEventListener(type, () => { keys[control] = false; });
     });
     window.addEventListener('blur', resetControls);
     document.addEventListener('visibilitychange', () => { if (document.hidden) resetControls(); lastFrame = 0; });
