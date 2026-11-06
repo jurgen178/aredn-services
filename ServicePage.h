@@ -126,6 +126,11 @@ static const char SERVICE_PAGE[] PROGMEM = R"AREDNSERVICE(
         <h2>Radio Tools</h2>
         <p>Calculate Maidenhead locator distances and radio link budgets.</p>
       </a>
+      <a class="service" href="/mesh-invaders">
+        <span class="service-mark" aria-hidden="true">I</span>
+        <h2>Mesh Invaders</h2>
+        <p>Defend the mesh in a retro arcade game.</p>
+      </a>
     </nav>
     <footer>Services are hosted locally by the AREDN Server.</footer>
   </main>

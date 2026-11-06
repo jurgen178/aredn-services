@@ -15,6 +15,7 @@ An experimental lightweight local web server for the **AREDN (Amateur Radio Emer
 * All service pages synchronize the device clock from the visiting browser; the message board also periodically corrects clock drift.
 * The camera snapshot is fetched once every 30 seconds by a background task, independently of the number of viewers.
 * Radio Tools provides browser-side Maidenhead locator and radio link-budget calculators without additional ESP32 processing.
+* Mesh Invaders is a browser-based arcade game with a shared persistent highscore table.
 
 ## System Requirements
 
@@ -97,7 +98,15 @@ The password is stored in ESP32 Preferences and is never returned by the setup A
 
 ## Services
 
-The service portal is available at `/`. The message board is served at `/msg-board`, with its API under `/msg-board/api/`. The camera snapshot page is available at `/camera`. Radio Tools is available at `/tools`.
+The service portal is available at `/`. The message board is served at `/msg-board`, with its API under `/msg-board/api/`. The camera snapshot page is available at `/camera`. Radio Tools is available at `/tools`, and Mesh Invaders at `/mesh-invaders`.
+
+### Mesh Invaders
+
+Play in a browser using the arrow keys or A/D and Space, or use the on-screen controls. Destroy the descending formation, avoid enemy fire, and protect yourself behind destructible shields. The occasional HTTPS invader moves from right to left and is worth 100 points; regular invaders are worth 10. Clear a wave to advance, and use the optional fullscreen button where supported. The game has no audio and runs locally in the browser after the page loads.
+
+Scores are submitted after game over. Player names contain 1–16 ASCII letters, numbers, dots, underscores or hyphens; names are compared without regard to case. The server keeps the best result per name and the top ten players. Because scores are submitted by the browser, they are not cheat-proof and the list is intended for a trusted local network. If submission fails, reconnect and retry before leaving the game-over screen.
+
+The list is stored in ESP32 Preferences/NVS and survives normal reboots and FFat formatting. Use **Mesh Invaders highscores** on the setup access point to export a JSON backup, restore it (replacing the list after confirmation), or clear the list. A full flash erase or erasure of the NVS partition can remove it, so export a backup before controller maintenance.
 
 ### Message Board
 
@@ -167,7 +176,7 @@ These endpoints require the admin session cookie created by login. Up to four ad
 
 ### Device and Setup APIs
 
-`GET /api/status` returns Wi-Fi, heap, and uptime information, the existing top-level board fields, and a `services` object containing the full status details and volatile page access count for each main service. Status endpoints return indented JSON for easier reading in a browser. Counts include only successful requests for `/msg-board`, `/camera`, and `/tools`; API requests and the home page are not counted. Counts reset on restart.
+`GET /api/status` returns Wi-Fi, heap, and uptime information, the existing top-level board fields, and a `services` object containing the full status details and volatile page access count for each main service. Status endpoints return indented JSON for easier reading in a browser. Counts include only successful requests for `/msg-board`, `/camera`, `/tools`, and `/mesh-invaders`; API requests and the home page are not counted. Counts reset on restart.
 
 `GET /msg-board/api/status` returns the board readiness, message and storage metrics, and access count. `GET /tools/api/status` returns its status and access count. `GET /camera/api/status` returns the camera snapshot status and access count.
 
@@ -178,6 +187,8 @@ The following setup pages and APIs are only available to clients connected to th
 * `GET /setup` serves the setup selection page.
 * `GET /setup/wifi` serves the Wi-Fi configuration page.
 * `GET /setup/camera` serves the Reolink camera configuration page.
+* `GET /setup/mesh-invaders` serves highscore backup, restore, and clear controls.
+* `POST /setup/api/mesh-invaders/scores` replaces the leaderboard using form fields `count` and `name0`/`score0` through `name9`/`score9`, as needed. The entries must be valid, unique by name, and sorted by score descending. An empty list clears the leaderboard.
 * `GET /api/wifi/status` returns connection state and setup/router IP addresses.
 * `POST /api/wifi/scan` starts an asynchronous scan for nearby networks.
 * `GET /api/wifi/networks` returns `scanning`, `complete` with scan results, or `idle`.
@@ -188,6 +199,12 @@ The following setup pages and APIs are only available to clients connected to th
 
 * `GET /camera/api/status` reports the camera status, snapshot availability, and age without revealing camera settings.
 * `GET /camera/image.jpg` serves the current cached JPEG. Before the first successful snapshot, it returns `503`.
+
+### Mesh Invaders API
+
+* `GET /mesh-invaders/api/scores` returns `{"version":1,"scores":[{"name":"PLAYER","score":100}]}`. The setup page exports the same format as JSON.
+* `POST /mesh-invaders/api/scores` accepts form fields `name` and `score` (an integer from 0 to 1000000000), and returns the current leaderboard. An existing name is updated only when its new score is higher. Ties retain their existing order.
+* `GET /mesh-invaders/api/status` reports the leaderboard storage status and game page access count. The game itself remains playable when leaderboard storage is unavailable.
 
 ### Radio Tools
 

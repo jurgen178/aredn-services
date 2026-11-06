@@ -47,6 +47,10 @@ static const char SETUP_PAGE[] PROGMEM = R"AREDN_SETUP(
         <h2>Reolink camera</h2>
         <p>Set the camera address and credentials, and check the snapshot connection.</p>
       </a>
+      <a class="setting" href="/setup/mesh-invaders">
+        <h2>Mesh Invaders highscores</h2>
+        <p>Back up, restore, or clear the leaderboard.</p>
+      </a>
     </nav>
     <footer>This setup page is available only while connected to the device setup access point.</footer>
   </main>

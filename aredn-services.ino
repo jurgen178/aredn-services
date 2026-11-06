@@ -17,6 +17,9 @@
 #include "CameraPage.h"
 #include "CameraSetupPage.h"
 #include "FfatMessageBoard.h"
+#include "MeshScores.h"
+#include "MeshInvadersPage.h"
+#include "MeshSetupPage.h"
 #include "ReolinkCamera.h"
 #include "SetupPage.h"
 #include "ServicePage.h"
@@ -63,10 +66,12 @@ AsyncWebServer server(80);
 Preferences wifiPreferences;
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 FfatMessageBoard messageBoard;
+MeshScores meshScores;
 ReolinkCamera reolinkCamera;
 std::atomic<uint32_t> messageBoardPageAccessCount{0};
 std::atomic<uint32_t> cameraPageAccessCount{0};
 std::atomic<uint32_t> toolsPageAccessCount{0};
+std::atomic<uint32_t> meshPageAccessCount{0};
 // Atomic fields are read or updated from both the server task and the main loop.
 std::atomic<uint8_t> deviceTimeSource{TIME_SOURCE_UNSET};
 // Both revision counters change together, so readers take them under one spinlock.
@@ -1586,28 +1591,171 @@ bool formatCameraStatusJson(const ReolinkCamera::StatusSnapshot& status,
   return written >= 0 && static_cast<size_t>(written) < responseSize;
 }
 
-bool formatToolsStatusJson(uint32_t accessCount,
-                           char* response,
-                           size_t responseSize,
-                           int indent)
+bool formatSimpleServiceStatusJson(uint32_t accessCount,
+                                   bool available,
+                                   char* response,
+                                   size_t responseSize,
+                                   int indent)
 {
   const int written = snprintf(
       response,
       responseSize,
       "{\n"
-      "%*s\"status\": \"ok\",\n"
+      "%*s\"status\": \"%s\",\n"
       "%*s\"access_count\": %lu\n"
       "%*s}",
       indent + 2, "",
+      available ? "ok" : "unavailable",
       indent + 2, "",
       static_cast<unsigned long>(accessCount),
       indent, "");
   return written >= 0 && static_cast<size_t>(written) < responseSize;
 }
 
+bool parseMeshNumber(const String& text, uint32_t maxValue, uint32_t& result)
+{
+  if (text.length() == 0 || text.length() > 10) return false;
+  uint32_t value = 0;
+  for (size_t i = 0; i < text.length(); ++i)
+  {
+    if (text[i] < '0' || text[i] > '9') return false;
+    const uint32_t digit = text[i] - '0';
+    if (value > (maxValue - digit) / 10) return false;
+    value = value * 10 + digit;
+  }
+  result = value;
+  return true;
+}
+
+void sendMeshScores(AsyncWebServerRequest* request)
+{
+  MeshScores::List list{};
+  if (meshScores.read(list) != MeshScores::Result::Ok)
+  {
+    request->send(503, "application/json", "{\"error\":\"scores_unavailable\"}");
+    return;
+  }
+  String json = "{\"version\":1,\"scores\":[";
+  for (size_t i = 0; i < list.count; ++i)
+  {
+    if (i) json += ',';
+    json += "{\"name\":\"";
+    json += list.entries[i].name;
+    json += "\",\"score\":";
+    json += String(list.entries[i].score);
+    json += '}';
+  }
+  json += "]}";
+  AsyncWebServerResponse* response = request->beginResponse(200, "application/json", json);
+  response->addHeader("Cache-Control", "no-store");
+  request->send(response);
+}
+
 void registerRoutes()
 {
   // Route handlers are asynchronous; long-running storage operations use the board's mutex.
+  server.on("/mesh-invaders", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (request->url() != "/mesh-invaders") { request->send(404); return; }
+    meshPageAccessCount.fetch_add(1, std::memory_order_relaxed);
+    AsyncWebServerResponse* response = request->beginResponse_P(
+        200, "text/html; charset=utf-8", MESH_INVADERS_PAGE);
+    response->addHeader("Cache-Control", "no-cache, must-revalidate");
+    request->send(response);
+  });
+  server.on("/mesh-invaders/api/scores", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    sendMeshScores(request);
+  });
+  server.on("/mesh-invaders/api/status", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    MeshScores::List list{};
+    const bool ready = meshScores.read(list) == MeshScores::Result::Ok;
+    char response[96];
+    if (!formatSimpleServiceStatusJson(meshPageAccessCount.load(std::memory_order_relaxed),
+                                       ready, response, sizeof(response), 0))
+    {
+      request->send(500, "application/json", "{\"error\":\"status_format_failed\"}");
+      return;
+    }
+    request->send(200, "application/json", response);
+  });
+  server.on("/mesh-invaders/api/scores", HTTP_POST, [](AsyncWebServerRequest* request)
+  {
+    uint32_t score = 0;
+    if (!request->hasParam("name", true) || !request->hasParam("score", true) ||
+        !parseMeshNumber(request->getParam("score", true)->value(), MeshScores::MAX_SCORE, score))
+    {
+      request->send(400, "application/json", "{\"error\":\"invalid_score\"}");
+      return;
+    }
+    const String name = request->getParam("name", true)->value();
+    if (name.length() != strlen(name.c_str()))
+    {
+      request->send(400, "application/json", "{\"error\":\"invalid_name\"}");
+      return;
+    }
+    const MeshScores::Result result = meshScores.submit(name.c_str(), score);
+    if (result != MeshScores::Result::Ok)
+    {
+      request->send(result == MeshScores::Result::Invalid ? 400 : 503,
+                    "application/json", "{\"error\":\"score_save_failed\"}");
+      return;
+    }
+    sendMeshScores(request);
+  });
+  server.on("/setup/mesh-invaders", HTTP_GET, [](AsyncWebServerRequest* request)
+  {
+    if (!isSetupApClient(request)) { sendSetupApRequired(request); return; }
+    if (request->url() != "/setup/mesh-invaders") { request->send(404); return; }
+    AsyncWebServerResponse* response = request->beginResponse_P(
+        200, "text/html; charset=utf-8", MESH_SETUP_PAGE);
+    response->addHeader("Cache-Control", "no-cache, must-revalidate");
+    request->send(response);
+  });
+  server.on("/setup/api/mesh-invaders/scores", HTTP_POST, [](AsyncWebServerRequest* request)
+  {
+    if (!isSetupApClient(request)) { sendSetupApRequired(request); return; }
+    uint32_t count = 0;
+    if (!request->hasParam("count", true) ||
+        !parseMeshNumber(request->getParam("count", true)->value(), MeshScores::CAPACITY, count))
+    {
+      request->send(400, "application/json", "{\"error\":\"invalid_list\"}");
+      return;
+    }
+    MeshScores::List list{};
+    list.version = 1;
+    list.count = count;
+    for (size_t i = 0; i < count; ++i)
+    {
+      const String nameKey = "name" + String(i);
+      const String scoreKey = "score" + String(i);
+      if (!request->hasParam(nameKey, true) || !request->hasParam(scoreKey, true))
+      {
+        request->send(400, "application/json", "{\"error\":\"invalid_list\"}");
+        return;
+      }
+      const String name = request->getParam(nameKey, true)->value();
+      if (name.length() > MeshScores::NAME_LENGTH ||
+          name.length() != strlen(name.c_str()) ||
+          !MeshScores::validName(name.c_str()) ||
+          !parseMeshNumber(request->getParam(scoreKey, true)->value(), MeshScores::MAX_SCORE,
+                           list.entries[i].score))
+      {
+        request->send(400, "application/json", "{\"error\":\"invalid_list\"}");
+        return;
+      }
+      memcpy(list.entries[i].name, name.c_str(), name.length() + 1);
+    }
+    const MeshScores::Result result = meshScores.replace(list);
+    if (result != MeshScores::Result::Ok)
+    {
+      request->send(result == MeshScores::Result::Invalid ? 400 : 503,
+                    "application/json", "{\"error\":\"list_save_failed\"}");
+      return;
+    }
+    sendMeshScores(request);
+  });
   server.on("/setup/wifi", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     if (!isSetupApClient(request))
@@ -2524,13 +2672,19 @@ void registerRoutes()
     char boardStatusJson[512];
     char cameraStatusJson[512];
     char toolsStatusJson[96];
+    char meshStatusJson[96];
+    MeshScores::List meshList{};
+    const bool meshReady = meshScores.read(meshList) == MeshScores::Result::Ok;
     char response[2048];
     if (!formatMessageBoardStatusJson(
             boardStatus, boardStatusJson, sizeof(boardStatusJson), 4) ||
         !formatCameraStatusJson(
             cameraStatus, cameraStatusJson, sizeof(cameraStatusJson), 4) ||
-        !formatToolsStatusJson(
-            toolsAccessCount, toolsStatusJson, sizeof(toolsStatusJson), 4))
+        !formatSimpleServiceStatusJson(
+            toolsAccessCount, true, toolsStatusJson, sizeof(toolsStatusJson), 4) ||
+        !formatSimpleServiceStatusJson(
+            meshPageAccessCount.load(std::memory_order_relaxed), meshReady,
+            meshStatusJson, sizeof(meshStatusJson), 4))
     {
       request->send(500, "application/json",
                     "{\"error\":\"status_format_failed\"}");
@@ -2559,7 +2713,8 @@ void registerRoutes()
         "  \"services\": {\n"
         "    \"msg-board\": %s,\n"
         "    \"camera\": %s,\n"
-        "    \"tools\": %s\n"
+        "    \"tools\": %s,\n"
+        "    \"mesh-invaders\": %s\n"
         "  }\n"
         "}",
         boardStatus.ready ? "true" : "false",
@@ -2577,7 +2732,8 @@ void registerRoutes()
         rssi,
         boardStatusJson,
         cameraStatusJson,
-        toolsStatusJson);
+        toolsStatusJson,
+        meshStatusJson);
     if (written < 0 || static_cast<size_t>(written) >= sizeof(response))
     {
       request->send(500, "application/json",
@@ -2603,8 +2759,9 @@ void registerRoutes()
   server.on("/tools/api/status", HTTP_GET, [](AsyncWebServerRequest* request)
   {
     char response[96];
-    if (!formatToolsStatusJson(
+    if (!formatSimpleServiceStatusJson(
             toolsPageAccessCount.load(std::memory_order_relaxed),
+            true,
             response,
             sizeof(response),
             0))
@@ -2752,6 +2909,10 @@ void setup()
   if (!messageBoard.begin())
   {
     Serial.println("ERROR: Could not initialize the FFat message board");
+  }
+  if (!meshScores.begin())
+  {
+    Serial.println("ERROR: Could not initialize Mesh Invaders highscore storage");
   }
   clientTimeMutex = xSemaphoreCreateMutex();
   adminMutex = xSemaphoreCreateMutex();
