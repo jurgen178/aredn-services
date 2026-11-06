@@ -15,6 +15,10 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     button, input { font: inherit; } button { padding: 10px 16px; color: #d7f8e6; background: #23513c; border: 1px solid #7df6ac; border-radius: 5px; cursor: pointer; }
     button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid #ffd66d; outline-offset: 3px; }
     a { color: #a9eec1; } main { max-width: 680px; padding: 24px; margin: auto; }
+    #start { min-width: 210px; min-height: 56px; padding: 12px 24px; border: 1px solid #a8ffcb; border-radius: 7px; color: #07140e; background: linear-gradient(110deg, #7df6ac, #b9ffd3 52%, #70eaa0); box-shadow: 0 0 0 3px rgb(125 246 172 / 12%), 0 0 24px rgb(125 246 172 / 28%), inset 0 1px rgb(255 255 255 / 65%); font: 800 1rem monospace; letter-spacing: .14em; text-transform: uppercase; transition: transform .15s ease, box-shadow .15s ease, filter .15s ease; }
+    #start::before { content: "▶"; margin-right: 12px; font-size: .9em; }
+    #start:hover { transform: translateY(-2px); filter: brightness(1.08); box-shadow: 0 0 0 4px rgb(125 246 172 / 16%), 0 0 34px rgb(125 246 172 / 42%), inset 0 1px rgb(255 255 255 / 75%); }
+    #start:active { transform: translateY(1px); filter: brightness(.96); }
     h1 { letter-spacing: .1em; color: #7df6ac; } h2 { margin-top: 24px; }
     .leaderboard { margin-top: 22px; padding: 18px; overflow: hidden; border: 1px solid #326d51; border-radius: 10px; background: linear-gradient(145deg, #162b3c, #0d1927); box-shadow: 0 0 24px rgb(125 246 172 / 8%), inset 0 0 22px rgb(125 246 172 / 3%); }
     .leaderboard-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
@@ -61,7 +65,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
   <main id="start-screen">
     <a href="/">← AREDN Services</a><h1>MESH INVADERS</h1>
     <p class="tagline"><strong>Defend the mesh!</strong><br><br>Move with ← / → or A / D; fire with Space. On touchscreens use the buttons below the game.</p>
-    <button id="start" type="button">Start game</button>
+    <button id="start" type="button">Intercept</button>
     <section class="leaderboard" aria-labelledby="leaderboard-title">
       <div class="leaderboard-heading"><h2 id="leaderboard-title">Highscores</h2><span>TOP TEN PILOTS</span></div>
       <table><thead><tr><th scope="col">Rank</th><th scope="col">Pilot</th><th scope="col">Score</th></tr></thead><tbody id="scores"></tbody></table>
@@ -70,7 +74,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     <p id="status" role="status"></p>
   </main>
   <section id="game" aria-label="Mesh Invaders game" hidden>
-    <div class="gamebar"><span id="hud"></span><span><button id="fullscreen" type="button">Fullscreen</button> <button id="quit" type="button">Quit</button></span></div>
+    <div class="gamebar"><span id="hud"></span><span><button id="fullscreen" type="button">Fullscreen</button> <button id="quit" type="button">Exit Game</button></span></div>
     <div class="playfield"><canvas id="canvas" width="800" height="600" aria-label="Game field"></canvas></div>
     <div class="controls" aria-label="Game controls">
       <button type="button" data-control="left" aria-label="Move left">◀</button>
@@ -321,7 +325,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     }
     $('start').addEventListener('click', startGame);
     $('restart').addEventListener('click', startGame);
-    $('quit').addEventListener('click', () => { if (confirm('Quit this game without saving?')) showStartScreen(); });
+    $('quit').addEventListener('click', showStartScreen);
     $('back').addEventListener('click', showStartScreen);
     $('fullscreen').addEventListener('click', async () => {
       try {

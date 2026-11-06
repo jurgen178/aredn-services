@@ -11,6 +11,7 @@ function pageScript(file) {
 function environment(script) {
   const elements = new Map();
   const listeners = new Map();
+  let confirmCalls = 0;
   const drawing = {
     calls: [],
     fillRect(...args) { this.calls.push(['rect', ...args]); },
@@ -43,10 +44,10 @@ function environment(script) {
       return { ok: true, json: async () => ({ version: 1, scores: [] }) };
     },
     requestAnimationFrame: () => 1, cancelAnimationFrame() {},
-    confirm: () => true, alert() {}, setTimeout() {}, Blob, URL
+    confirm: () => { confirmCalls++; return true; }, alert() {}, setTimeout() {}, Blob, URL
   });
   vm.runInContext(script, context);
-  return { context, element, responses, drawing };
+  return { context, element, responses, drawing, confirmCalls: () => confirmCalls };
 }
 
 async function main() {
@@ -115,6 +116,10 @@ async function main() {
   });
   await game.element('score-form').handlers.submit({ preventDefault() {} });
   assert.equal(game.element('score-form').hidden, true);
+  game.element('quit').handlers.click();
+  assert.equal(game.confirmCalls(), 0);
+  assert.equal(game.element('game').hidden, true);
+  assert.equal(game.element('start-screen').hidden, false);
 
   const extra = environment(pageScript('MeshInvadersPage.h'));
   const x = text => vm.runInContext(text, extra.context);
