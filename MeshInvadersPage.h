@@ -325,7 +325,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     }
     $('start').addEventListener('click', startGame);
     $('restart').addEventListener('click', startGame);
-    $('quit').addEventListener('click', showStartScreen);
+    $('quit').addEventListener('click', () => { if (confirm('Exit this game?')) showStartScreen(); });
     $('back').addEventListener('click', showStartScreen);
     $('fullscreen').addEventListener('click', async () => {
       try {
