@@ -19,6 +19,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
     table { width: 100%; border-collapse: collapse; } th, td { padding: 8px; text-align: left; border-bottom: 1px solid #385347; }
     #status, #save-status { min-height: 1.5em; color: #ffd66d; }
     #qrt { color: #a9eec1; font-style: italic; }
+    .tagline strong { color: #7df6ac; font-size: 1.15em; }
     #game { width: 100%; height: 100vh; height: 100dvh; display: flex; flex-direction: column; padding: 8px; gap: 6px; background: #080e19; }
     #game:fullscreen { width: 100%; height: 100%; }
     .gamebar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
@@ -41,7 +42,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
 <body>
   <main id="lobby">
     <a href="/">← AREDN Services</a><h1>MESH INVADERS</h1>
-    <p>Defend the mesh! Move with ← / → or A / D; fire with Space. On touchscreens use the buttons below the game.</p>
+    <p class="tagline"><strong>Defend the mesh!</strong><br><br>Move with ← / → or A / D; fire with Space. On touchscreens use the buttons below the game.</p>
     <button id="start" type="button">Start game</button>
     <h2>Highscores</h2>
     <table><thead><tr><th>Rank</th><th>Player</th><th>Score</th></tr></thead><tbody id="scores"></tbody></table>
