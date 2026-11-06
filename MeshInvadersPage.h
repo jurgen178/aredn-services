@@ -56,13 +56,14 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       <button type="button" data-control="right" aria-label="Move right">▶</button>
     </div>
     <div id="result" hidden><div class="result-card">
-      <h2>Game over</h2><p id="final-score"></p><p id="qrt">QRT – station closed. 73!</p>
+      <h2 id="result-title">Game over</h2><p id="final-score"></p><p id="qrt">QRT – station closed. 73!</p>
       <form id="score-form"><label for="name">Player name (1–16 letters, numbers, . _ -)</label>
         <div class="score-entry">
           <input id="name" maxlength="16" pattern="[A-Za-z0-9_.\-]{1,16}" required autocomplete="nickname">
           <button type="submit">Save score</button>
         </div>
       </form><p id="save-status" role="status"></p>
+      <button id="restart" type="button" hidden>Play again</button>
       <button id="back" type="button">Back to highscores</button>
     </div></div>
   </section>
@@ -90,9 +91,13 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       } catch (error) { $('status').textContent = 'Highscores unavailable: ' + error.message; }
     }
     function resetControls() { keys.left = keys.right = keys.fire = false; }
-    const WAVE_NAMES = ['CQ CQ – Station on the air', 'QRM – Interference on frequency', 'QSB – Signal fading',
-      'QRN – Static crashes', 'Sunspot minimum', 'Ionospheric storm', 'Contest weekend'];
+    const WAVE_NAMES = [
+      'CQ CQ – Station on the air', 'QRM – Interference on frequency', 'QSB – Signal fading',
+      'QRN – Static crashes', 'Sunspot minimum', 'Ionospheric storm', 'Deep-space signal',
+      'Rogue satellite on frequency', 'QRM in the asteroid belt', 'The final net'
+    ];
     function waveBanner(level) {
+      if (level === 11) return { text: 'BOSS WAVE', name: 'The Repeater', remaining: 3.5 };
       return { text: 'WAVE ' + level, name: WAVE_NAMES[level - 1] || 'Pile-up!', remaining: 2.5 };
     }
     function createWave(level) {
@@ -100,6 +105,9 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       for (let row = 0; row < 4; row++) for (let col = 0; col < 9; col++)
         enemies.push({ x: 110 + col * 62, y: 90 + row * 38, w: 30, h: 22 });
       return { enemies, direction: 1, step: 0, speed: Math.min(150, 25 + level * 12) };
+    }
+    function createBoss() {
+      return { x: 320, y: 82, w: 160, h: 66, hp: 12, maxHp: 12, direction: 1, fireTimer: 1 };
     }
     function makeShields() {
       const shields = [];
@@ -113,14 +121,18 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       game = { score: 0, lives: 3, level: 1, player: { x: 380, y: 555, w: 40, h: 20 },
         wave: createWave(1), shields: makeShields(), shots: [], enemyShots: [],
         fireTimer: 0, enemyTimer: 1, invulnerable: 0, bonus: null, bonusTimer: 12, bonusNotice: null,
-        lastBonusKind: 'life', time: 0, banner: waveBanner(1) };
+        lastBonusKind: 'life', time: 0, banner: waveBanner(1), boss: null };
       $('lobby').hidden = true; $('game').hidden = false; $('result').hidden = true;
       $('save-status').textContent = ''; $('score-form').hidden = false;
       lastFrame = 0; cancelAnimationFrame(animation); animation = requestAnimationFrame(frame);
     }
     function hit(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
-    function endGame() {
-      game.over = true; resetControls(); $('final-score').textContent = 'Score: ' + game.score;
+    function endGame(won = false) {
+      game.over = true; game.won = won; resetControls();
+      $('result-title').textContent = won ? 'Mesh saved!' : 'Game over';
+      $('final-score').textContent = 'Score: ' + game.score;
+      $('qrt').textContent = won ? '73 – You saved the mesh!' : 'QRT – station closed. 73!';
+      $('restart').hidden = !won;
       $('result').hidden = false; $('name').focus();
     }
     function update(dt) {
@@ -148,6 +160,17 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
         g.bonus.x -= 100 * dt;
         if (g.bonus.x + g.bonus.w < 0) { g.bonus = null; g.bonusTimer = 18 + Math.random() * 12; }
       }
+      if (g.boss) {
+        const boss = g.boss;
+        boss.x += boss.direction * 100 * dt;
+        if (boss.x < 28 || boss.x + boss.w > 772) boss.direction *= -1;
+        boss.fireTimer -= dt;
+        if (boss.fireTimer <= 0) {
+          for (const offset of [28, 80, 132])
+            g.enemyShots.push({ x: boss.x + offset, y: boss.y + boss.h, w: 7, h: 14 });
+          boss.fireTimer = 1.1;
+        }
+      }
       const dx = wave.direction * wave.speed * dt;
       if (wave.enemies.some(e => e.x + dx < 12 || e.x + e.w + dx > 788)) {
         wave.direction *= -1; wave.enemies.forEach(e => { e.y += 15; });
@@ -170,6 +193,10 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
           g.bonusNotice = { text, x: g.bonus.x + g.bonus.w / 2, y: g.bonus.y + 16, remaining: 1.5 };
           g.bonus = null; g.bonusTimer = 18 + Math.random() * 12;
         }
+        if (!shot.dead && g.boss && hit(shot, g.boss)) {
+          shot.dead = true; g.boss.hp--; g.score += 25;
+          if (g.boss.hp <= 0) { g.boss = null; g.score += 700; endGame(true); return; }
+        }
         if (!shot.dead) {
           const index = wave.enemies.findIndex(e => hit(shot, e));
           if (index >= 0) { wave.enemies.splice(index, 1); shot.dead = true; g.score += 10; }
@@ -185,8 +212,14 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       }
       g.shots = g.shots.filter(s => !s.dead && s.y + s.h > 0);
       g.enemyShots = g.enemyShots.filter(s => !s.dead && s.y < 600);
-      if (!wave.enemies.length) {
-        g.level++; g.wave = createWave(g.level); g.enemyShots = []; g.shots = []; g.banner = waveBanner(g.level);
+      if (!g.boss && !wave.enemies.length) {
+        if (g.level === 10) {
+          g.level = 11; g.wave = { enemies: [], direction: 1, step: 0, speed: 0 };
+          g.boss = createBoss();
+        } else {
+          g.level++; g.wave = createWave(g.level);
+        }
+        g.enemyShots = []; g.shots = []; g.banner = waveBanner(g.level);
       }
     }
     function draw() {
@@ -198,6 +231,20 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
         ctx.fillRect(e.x + 5, e.y, 20, 5); ctx.fillRect(e.x, e.y + 5, 30, 12);
         ctx.fillRect(e.x + 3, e.y + 17, 7, 5); ctx.fillRect(e.x + 20, e.y + 17, 7, 5);
         ctx.fillStyle = '#080e19'; ctx.fillRect(e.x + 6, e.y + 8, 4, 4); ctx.fillRect(e.x + 20, e.y + 8, 4, 4); ctx.fillStyle = '#7df6ac';
+      }
+      if (g.boss) {
+        const b = g.boss;
+        ctx.fillStyle = '#67c7b1'; ctx.fillRect(b.x + 20, b.y + 18, 120, 35);
+        ctx.fillRect(b.x + 38, b.y + 8, 84, 10); ctx.fillRect(b.x + 55, b.y, 50, 8);
+        ctx.fillRect(b.x + 8, b.y + 30, 12, 16); ctx.fillRect(b.x + 140, b.y + 30, 12, 16);
+        ctx.fillStyle = '#d7f8e6'; ctx.fillRect(b.x + 77, b.y - 16, 6, 16);
+        ctx.fillRect(b.x + 68, b.y - 20, 24, 5);
+        ctx.fillStyle = '#153b43'; ctx.fillRect(b.x + 32, b.y + 25, 96, 14);
+        ctx.fillStyle = '#ffd66d'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('REPEATER', b.x + b.w / 2, b.y + 36); ctx.textAlign = 'left';
+        ctx.fillStyle = '#385347'; ctx.fillRect(300, 24, 200, 8);
+        ctx.fillStyle = '#7df6ac'; ctx.fillRect(300, 24, 200 * b.hp / b.maxHp, 8);
+        ctx.strokeStyle = '#d7f8e6'; ctx.strokeRect(300, 24, 200, 8);
       }
       for (const s of g.shields) if (s.hp) { ctx.fillStyle = s.hp === 2 ? '#579a6d' : '#2c5941'; ctx.fillRect(s.x, s.y, s.w - 1, s.h - 1); }
       if (g.invulnerable <= 0 || Math.floor(g.invulnerable * 8) % 2) {
@@ -248,6 +295,7 @@ static const char MESH_INVADERS_PAGE[] PROGMEM = R"MESHGAME(
       loadScores(); $('start').focus();
     }
     $('start').addEventListener('click', startGame);
+    $('restart').addEventListener('click', startGame);
     $('quit').addEventListener('click', () => { if (confirm('Quit this game without saving?')) lobby(); });
     $('back').addEventListener('click', lobby);
     $('fullscreen').addEventListener('click', async () => {

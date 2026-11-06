@@ -11,7 +11,12 @@ function pageScript(file) {
 function environment(script) {
   const elements = new Map();
   const listeners = new Map();
-  const drawing = { calls: [], fillRect(...args) { this.calls.push(['rect', ...args]); }, fillText(...args) { this.calls.push(['text', ...args]); } };
+  const drawing = {
+    calls: [],
+    fillRect(...args) { this.calls.push(['rect', ...args]); },
+    strokeRect(...args) { this.calls.push(['strokeRect', ...args]); },
+    fillText(...args) { this.calls.push(['text', ...args]); }
+  };
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
       id, hidden: false, disabled: false, textContent: '', value: '', dataset: {},
@@ -134,13 +139,33 @@ async function main() {
   assert.equal(x('game.banner.name'), 'Sunspot minimum');
   x('draw()');
   assert.ok(extra.drawing.calls.some(c => c[0] === 'text' && c[1] === 'WAVE 5'));
-  assert.equal(x('waveBanner(12).name'), 'Pile-up!');
+  assert.equal(x('WAVE_NAMES.length'), 10);
+  assert.equal(x('waveBanner(8).name'), 'Rogue satellite on frequency');
+  assert.equal(x('waveBanner(10).name'), 'The final net');
+  assert.equal(x('waveBanner(11).text'), 'BOSS WAVE');
+  assert.equal(x('waveBanner(11).name'), 'The Repeater');
   x('game.wave.enemies = [{x: 100, y: 100, w: 30, h: 22}]; game.time = 0.01');
   extra.drawing.calls.length = 0; x('draw()');
   assert.equal(rects(30, 12), 0, 'invaders fade during the QSB window');
   x('game.time = 2');
   extra.drawing.calls.length = 0; x('draw()');
   assert.equal(rects(30, 12), 1);
+
+  const boss = environment(pageScript('MeshInvadersPage.h'));
+  const b = text => vm.runInContext(text, boss.context);
+  b('startGame(); game.level = 10; game.wave = createWave(10); game.wave.enemies = [{x: 100, y: 100, w: 30, h: 22}]; game.shots = [{x: 105, y: 115, w: 4, h: 12}]; update(0.01)');
+  assert.equal(b('game.level'), 11);
+  assert.equal(b('game.boss.hp'), 12);
+  assert.equal(b('game.banner.name'), 'The Repeater');
+  b('draw()');
+  assert.ok(boss.drawing.calls.some(c => c[0] === 'text' && c[1] === 'REPEATER'));
+  b('for (let i = 0; i < 12; i++) { game.shots = [{x: game.boss.x + 20, y: game.boss.y + 20, w: 4, h: 12}]; update(0.001); if (game.over) break; }');
+  assert.equal(b('game.over'), true);
+  assert.equal(b('game.won'), true);
+  assert.equal(b('game.score'), 1010);
+  assert.equal(boss.element('result-title').textContent, 'Mesh saved!');
+  assert.equal(boss.element('qrt').textContent, '73 – You saved the mesh!');
+  assert.equal(boss.element('restart').hidden, false);
 
   const setup = environment(pageScript('MeshSetupPage.h'));
   const validate = value => vm.runInContext(`validate(${JSON.stringify(value)})`, setup.context);
