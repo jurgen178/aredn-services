@@ -528,9 +528,13 @@ void drawBoardDisplay()
                static_cast<unsigned long>(fetchMs / 1000),
                static_cast<unsigned long>((fetchMs % 1000) / 100));
       drawDisplayLine(6, "Fetch: ", value);
-      snprintf(value, sizeof(value), "%lu.%lu KiB",
-               static_cast<unsigned long>(fetchBytes / 1024),
-               static_cast<unsigned long>((fetchBytes % 1024) * 10 / 1024));
+      
+      if(fetchBytes == 0)
+        strlcpy(value, "N/A", sizeof(value));
+      else
+        snprintf(value, sizeof(value), "%lu.%lu KiB",
+                static_cast<unsigned long>(fetchBytes / 1024),
+                static_cast<unsigned long>((fetchBytes % 1024) * 10 / 1024));
       drawDisplayLine(7, "Data: ", value);
     }
     else
