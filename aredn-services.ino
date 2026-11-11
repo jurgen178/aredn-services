@@ -15,6 +15,7 @@
 #include <new>
 #include "BoardPage.h"
 #include "CameraPage.h"
+#include "CameraLed.h"
 #include "CameraSetupPage.h"
 #include "FfatMessageBoard.h"
 #include "MeshScores.h"
@@ -60,6 +61,9 @@ constexpr int8_t OLED_RESET = -1;
 constexpr uint8_t OLED_ADDRESS = 0x3C;
 constexpr uint32_t OLED_PAGE_INTERVAL_MS = 5000;
 constexpr uint8_t OLED_PAGE_COUNT = 4;
+#if defined(ARDUINO_NANO_ESP32)
+CameraLed cameraLed;
+#endif
 
 // These objects are shared by asynchronous HTTP callbacks and the main Arduino loop.
 AsyncWebServer server(80);
@@ -2881,6 +2885,14 @@ const char* resetReasonName(esp_reset_reason_t reason)
 
 void setup()
 {
+#if defined(ARDUINO_NANO_ESP32)
+  digitalWrite(LED_RED, HIGH);
+  digitalWrite(LED_GREEN, HIGH);
+  digitalWrite(LED_BLUE, HIGH);
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_BLUE, OUTPUT);
+#endif
   // Bring up diagnostics and the optional display before initializing storage and networking.
   Serial.begin(115200);
 
@@ -3010,6 +3022,19 @@ void setup()
 void loop()
 {
   const uint32_t now = millis();
+#if defined(ARDUINO_NANO_ESP32)
+  static uint32_t lastLedUpdate = 0;
+  if (now - lastLedUpdate >= 1000)
+  {
+    lastLedUpdate = now;
+    uint32_t lastImageMs = 0;
+    const bool imageAvailable = reolinkCamera.lastImageTime(lastImageMs);
+    const CameraLed::Color ledColor = cameraLed.update(imageAvailable, lastImageMs, millis());
+    digitalWrite(LED_RED, ledColor == CameraLed::Color::Red ? LOW : HIGH);
+    digitalWrite(LED_GREEN, ledColor == CameraLed::Color::Green ? LOW : HIGH);
+    digitalWrite(LED_BLUE, ledColor == CameraLed::Color::Blue ? LOW : HIGH);
+  }
+#endif
   bool connected = WiFi.status() == WL_CONNECTED;
   static uint32_t loggedDisconnectCount = 0;
   const uint32_t disconnectCount = wifiDisconnectCount.load(std::memory_order_acquire);

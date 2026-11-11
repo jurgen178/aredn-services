@@ -381,6 +381,16 @@ public:
     return imageAvailable_.load(std::memory_order_acquire);
   }
 
+  bool lastImageTime(uint32_t& lastSuccessMs) const
+  {
+    if (!imageAvailable_.load(std::memory_order_acquire))
+    {
+      return false;
+    }
+    lastSuccessMs = lastSuccessMs_.load(std::memory_order_acquire);
+    return true;
+  }
+
   bool imageDimensions(uint16_t& width, uint16_t& height) const
   {
     const uint32_t dimensions = imageDimensions_.load(std::memory_order_acquire);

@@ -26,6 +26,8 @@ An experimental lightweight local web server for the **AREDN (Amateur Radio Emer
 
 The optional SSD1306 OLED uses the board's default I2C interface and address `0x3C`. When connected, it cycles every five seconds through four screens: main server status, a large two-line IP address, the newest message, and camera status. The camera screen shows the snapshot age and actual JPEG dimensions, the measured interval between the last two successful snapshots, the next requested resolution, and the duration and bytes received in the last camera fetch (including failed attempts). Until two snapshots have been received, the measured refresh interval is shown as waiting. The main screen shows the router connection state and Wi-Fi signal strength. If no router Wi-Fi credentials are saved, the OLED displays the setup access point name, password, and setup URL. The web service can also run without the OLED.
 
+On the Nano ESP32, the built-in RGB LED independently indicates the age of the latest successful camera snapshot: green through 35 seconds, blue over 35 through 45 seconds, and red thereafter. It turns green when a new image arrives and stays off until the first image is received or when camera settings are cleared. This is the current snapshot age, not the measured refresh interval shown on the OLED. The LED uses the board's active-low `LED_RED`, `LED_GREEN`, and `LED_BLUE` pins (14, 15, and 16 with the default Arduino pin numbering); other boards do not use these pins.
+
 ### OLED Wiring
 
 For an Arduino Nano ESP32, connect a 4-pin I2C SSD1306 OLED as follows:
